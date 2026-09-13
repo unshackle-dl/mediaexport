@@ -1,0 +1,142 @@
+{
+  "version": 2,
+  "service": "EXAMPLE",
+  "titles": {
+    "00000000-0000-4000-8000-000000000001": {
+      "meta": {
+        "id": "00000000-0000-4000-8000-000000000001",
+        "language": null,
+        "type": "episode",
+        "series_title": "Example Show",
+        "season": 2,
+        "number": 1,
+        "name": "Pilot",
+        "year": 2026,
+        "air_date": null
+      },
+      "manifest_url": "https://cdn.example.com/vod/hd/master.mpd?token=REDACTED",
+      "manifest_type": "DASH",
+      "tracks": {
+        "926f8f90": {
+          "type": "Video",
+          "id": "926f8f90",
+          "url": "https://cdn.example.com/vod/uhd/master.mpd?token=REDACTED",
+          "language": "en",
+          "is_original_lang": true,
+          "descriptor": "DASH",
+          "needs_repack": false,
+          "name": null,
+          "edition": [],
+          "codec": "HEVC",
+          "range": "HDR10",
+          "bitrate": 17084651,
+          "width": 3840,
+          "height": 2160,
+          "fps": "23.976023976023978",
+          "scan_type": null,
+          "dv_compatible_bitstream": false,
+          "drm": [
+            {
+              "system": "Widevine",
+              "pssh_b64": "AAAAOHBzc2gAAAAA7e+LqXnWSs6jyCfc1R0h7QAAABgSEAEBAQEBAQEBAQEBAQEBAQFI49yVmwY=",
+              "kids": [
+                "01010101010101010101010101010101"
+              ]
+            }
+          ],
+          "keys": {
+            "01010101010101010101010101010101": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+          }
+        },
+        "f9d5b7f": {
+          "type": "Audio",
+          "id": "f9d5b7f",
+          "url": "https://cdn.example.com/vod/hd/master.mpd?token=REDACTED",
+          "language": "en",
+          "is_original_lang": true,
+          "descriptor": "DASH",
+          "needs_repack": false,
+          "name": "English",
+          "edition": [],
+          "codec": "EC3",
+          "bitrate": 323214,
+          "channels": 5.1,
+          "joc": null,
+          "descriptive": false,
+          "drm": [
+            {
+              "system": "Widevine",
+              "pssh_b64": "AAAAOHBzc2gAAAAA7e+LqXnWSs6jyCfc1R0h7QAAABgSEAUFBQUFBQUFBQUFBQUFBQVI49yVmwY=",
+              "kids": [
+                "05050505050505050505050505050505"
+              ]
+            }
+          ],
+          "keys": {
+            "05050505050505050505050505050505": "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
+          }
+        },
+        "27c1c3f6": {
+          "type": "Audio",
+          "id": "27c1c3f6",
+          "url": "https://cdn.example.com/vod/hd/master.mpd?token=REDACTED",
+          "language": "es",
+          "is_original_lang": false,
+          "descriptor": "DASH",
+          "needs_repack": false,
+          "name": "Spanish",
+          "edition": [],
+          "codec": "AAC",
+          "bitrate": 130091,
+          "channels": 2.0,
+          "joc": null,
+          "descriptive": false,
+          "drm": [
+            {
+              "system": "Widevine",
+              "pssh_b64": "AAAAOHBzc2gAAAAA7e+LqXnWSs6jyCfc1R0h7QAAABgSEAUFBQUFBQUFBQUFBQUFBQVI49yVmwY=",
+              "kids": [
+                "05050505050505050505050505050505"
+              ]
+            }
+          ],
+          "keys": {
+            "05050505050505050505050505050505": "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
+          }
+        },
+        "d2a7b40a": {
+          "type": "Subtitle",
+          "id": "d2a7b40a",
+          "url": "https://cdn.example.com/vod/hd/master.mpd?token=REDACTED",
+          "language": "en",
+          "is_original_lang": true,
+          "descriptor": "DASH",
+          "needs_repack": false,
+          "name": "English",
+          "edition": [],
+          "codec": "WebVTT",
+          "cc": false,
+          "sdh": false,
+          "forced": false
+        },
+        "b219c970": {
+          "type": "Subtitle",
+          "id": "b219c970",
+          "url": "https://cdn.example.com/vod/hd/master.mpd?token=REDACTED",
+          "language": "es",
+          "is_original_lang": false,
+          "descriptor": "DASH",
+          "needs_repack": false,
+          "name": "Spanish",
+          "edition": [],
+          "codec": "WebVTT",
+          "cc": false,
+          "sdh": false,
+          "forced": false
+        }
+      },
+      "chapters": [],
+      "attachments": []
+    }
+  }
+}

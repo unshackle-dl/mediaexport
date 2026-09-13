@@ -1,0 +1,78 @@
+{
+  "kind": "unidl-export",
+  "version": 1,
+  "service": "example",
+  "service_name": "Example Service",
+  "created": "2026-09-12T14:04:19",
+  "app": "unidl 2.0.6",
+  "titles": [
+    {
+      "save_name": "Example.Show.S02E01.Pilot.2160p.EXAMPLE.WEB-DL.DDP5.1.Atmos.H.265.HDR",
+      "title": {
+        "id": "00000000-0000-4000-8000-000000000001",
+        "kind": "episode",
+        "name": "Example Show",
+        "service": "example",
+        "year": "2026",
+        "season": 2,
+        "episode": 1,
+        "episode_name": "Pilot",
+        "synopsis": "An example episode."
+      },
+      "keys": [
+        "01010101010101010101010101010101:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+        "02020202020202020202020202020202:a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2"
+      ],
+      "manifest_url": "https://cdn.example.com/vod/uhd/master.mpd?token=REDACTED",
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (example)"
+      },
+      "note": "H265 UHD HDR10",
+      "drm": {
+        "system": "widevine",
+        "pssh": "AAAAOHBzc2gAAAAA7e+LqXnWSs6jyCfc1R0h7QAAABgSEAEBAQEBAQEBAQEBAQEBAQFI49yVmwY="
+      },
+      "tracks": [
+        "+ Vid *CENC 3840x2160 | 17.08 Mbps | 23.976 | H.265 | 247 Segments | Main | ~24m42s | HDR10 | 2.95GB | Encrypted",
+        "- Vid *CENC 3840x2160 | 14.21 Mbps | 23.976 | H.265 | 247 Segments | Main | ~24m42s | HDR10 | 2.45GB | Encrypted",
+        "- Vid *CENC 2560x1440 | 9.36 Mbps | 23.976 | H.265 | 247 Segments | Main | ~24m42s | HDR10 | 1.61GB | Encrypted",
+        "- Vid *CENC 1920x1080 | 6.47 Mbps | 23.976 | H.265 | 247 Segments | Main | ~24m42s | HDR10 | 1.12GB | Encrypted"
+      ],
+      "summary": "6 selected / 15 total | 9 video | 4 audio | 2 subtitle"
+    },
+    {
+      "save_name": "Example.Show.S02E02.Second.2160p.EXAMPLE.WEB-DL.DDP5.1.Atmos.H.265.HDR",
+      "title": {
+        "id": "00000000-0000-4000-8000-000000000002",
+        "kind": "episode",
+        "name": "Example Show",
+        "service": "example",
+        "year": "2026",
+        "season": 2,
+        "episode": 2,
+        "episode_name": "Second",
+        "synopsis": "An example episode."
+      },
+      "keys": [
+        "03030303030303030303030303030303:a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4",
+        "04040404040404040404040404040404:a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3"
+      ],
+      "manifest_url": "https://cdn.example.com/vod/uhd-alt/master.mpd?token=REDACTED",
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (example)"
+      },
+      "note": "H265 UHD HDR10",
+      "drm": {
+        "system": "widevine",
+        "pssh": "AAAAOHBzc2gAAAAA7e+LqXnWSs6jyCfc1R0h7QAAABgSEAMDAwMDAwMDAwMDAwMDAwNI49yVmwY="
+      },
+      "tracks": [
+        "+ Vid *CENC 3840x2160 | 18.53 Mbps | 23.976 | H.265 | 237 Segments | Main | ~23m38s | HDR10 | 3.06GB | Encrypted",
+        "- Vid *CENC 3840x2160 | 15.7 Mbps | 23.976 | H.265 | 237 Segments | Main | ~23m38s | HDR10 | 2.59GB | Encrypted",
+        "- Vid *CENC 2560x1440 | 10.76 Mbps | 23.976 | H.265 | 237 Segments | Main | ~23m38s | HDR10 | 1.78GB | Encrypted",
+        "- Vid *CENC 1920x1080 | 7.36 Mbps | 23.976 | H.265 | 237 Segments | Main | ~23m38s | HDR10 | 1.21GB | Encrypted"
+      ],
+      "summary": "6 selected / 15 total | 9 video | 4 audio | 2 subtitle"
+    }
+  ]
+}
