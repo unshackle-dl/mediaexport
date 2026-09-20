@@ -25,20 +25,22 @@ KIND = "mediaexport"
 VERSION = 1
 
 __all__ = [
+    "UNDERSTOOD",
     "KIND",
     "VERSION",
     "Document",
     "Drm",
     "Entry",
     "ExportError",
+    "KeyConflict",
     "Manifest",
     "dumps",
     "from_unidl_v1",
     "from_unshackle_v2",
     "guess_type",
-    "ts_ms",
     "loads",
     "read",
+    "ts_ms",
     "write",
 ]
 
@@ -47,28 +49,48 @@ class ExportError(ValueError):
     """Not an export, or one this reader cannot use."""
 
 
+class KeyConflict(ExportError):
+    """One KID with two different content keys.
+
+    A writer that merges into an existing file tells this apart from a corrupt file: the
+    file itself is readable, so it keeps its other titles and is not thrown away.
+    """
+
+
 @dataclass
 class Manifest:
-    """``type`` is ``dash``, ``hls``, ``ism`` or empty. ``role`` is ``primary``, ``extra`` or empty."""
+    """``type`` is ``dash``, ``hls``, ``ism`` or empty. ``role`` is ``primary``, ``extra`` or empty.
+
+    ``extras`` holds the fields this reader does not know, written back as they came.
+    """
 
     url: str
     type: str = ""
     headers: dict[str, str] = field(default_factory=dict)
     role: str = ""
+    extras: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class Drm:
-    """``system`` is ``widevine``, ``playready`` or ``clearkey``. ``wrm_header`` is optional beside ``pssh``."""
+    """``system`` is ``widevine``, ``playready`` or ``clearkey``. ``wrm_header`` is optional beside ``pssh``.
+
+    ``extras`` holds the fields this reader does not know, written back as they came.
+    """
 
     system: str
     pssh: str = ""
     wrm_header: str = ""
+    extras: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class Entry:
-    """One title. ``kind`` is ``movie``, ``episode``, ``song`` or ``clip``."""
+    """One title. ``kind`` is ``movie``, ``episode``, ``song`` or ``clip``.
+
+    ``extensions`` holds the ``x-<app>`` blocks and every other field this reader does not
+    know, written back as they came.
+    """
 
     id: str
     kind: str
@@ -101,6 +123,10 @@ class Entry:
         """The ``x-<app>`` block, created on first use."""
         return self.extensions.setdefault(f"x-{app}", {})
 
+    def add_key(self, kid: Any, key: Any) -> None:
+        """Put one KID:KEY into ``keys``, normalised. A second, different key for one KID raises."""
+        _merge_key(self.keys, kid, key)
+
 
 @dataclass
 class Document:
@@ -128,11 +154,13 @@ class Document:
         for e in self.titles:
             for k, v in e.keys.items():
                 if pool.setdefault(k, v) != v:
-                    raise ExportError(f"KID {k} has two different keys")
+                    raise KeyConflict(f"KID {k[:40]} has two different keys")
         return pool
 
 
 def dumps(doc: Document) -> str:
+    """Serialise ``doc``. A document the reader would refuse raises here, not at the next read."""
+    doc.key_pool()
     raw: dict[str, Any] = {
         "kind": KIND,
         "version": VERSION,
@@ -152,12 +180,17 @@ def _entry_out(e: Entry) -> dict[str, Any]:
         if k == "extensions" or v in (None, "", [], {}):
             continue
         if k == "manifests":
-            v = [{mk: mv for mk, mv in m.items() if mv not in ("", {})} for m in v]
+            v = [_manifest_out(m) for m in v]
         elif k == "drm":
-            v = [{dk: dv for dk, dv in d.items() if dv != ""} for d in v]
+            v = [{dk: dv for dk, dv in d.items() if dk != "extras" and dv != ""} | d["extras"] for d in v]
         out[k] = v
     out.update(e.extensions)
     return out
+
+
+def _manifest_out(m: dict[str, Any]) -> dict[str, Any]:
+    m = m | {"headers": _headers(m["headers"])}
+    return {k: v for k, v in m.items() if k != "extras" and v not in ("", {})} | m["extras"]
 
 
 def write(path: Path | str, doc: Document) -> Path:
@@ -216,7 +249,7 @@ def _media_export_in(raw: dict[str, Any]) -> Document:
         region=str(raw.get("region", "")),
         generator=dict(raw.get("generator") or {}),
         created=str(raw.get("created", "")),
-        titles=[_entry_in(t) for t in titles],
+        titles=[_entry_in(t, i) for i, t in enumerate(titles)],
     )
 
 
@@ -228,15 +261,18 @@ def read(path: Path | str) -> Document:
     return loads(text)
 
 
-def _entry_in(t: Any) -> Entry:
+def _entry_in(t: Any, index: int) -> Entry:
+    """One title. ``index`` is its position in the file, the id it gets when it has none of its own."""
     if not isinstance(t, dict):
         raise ExportError("one of the titles is not an object")
+    _check_crit(t)
     manifests = [
         Manifest(
             url=str(m["url"]),
             type=str(m.get("type", "")).lower(),
-            headers={str(k): str(v) for k, v in (m.get("headers") or {}).items()},
+            headers=_headers(m.get("headers")),
             role=str(m.get("role", "")),
+            extras={k: v for k, v in m.items() if k not in _MANIFEST_FIELDS},
         )
         for m in t.get("manifests") or []
         if isinstance(m, dict) and m.get("url")
@@ -245,7 +281,8 @@ def _entry_in(t: Any) -> Entry:
     if not manifests and not any(isinstance(r, dict) and r.get("url") for r in t.get("tracks") or []):
         raise ExportError(f"{t.get('title') or t.get('id') or 'a title'}: no manifest to fetch")
     return Entry(
-        id=str(t.get("id", "")),
+        # two id-less titles would otherwise land on one Document.add slot and one would go
+        id=str(t.get("id") or "") or f"title-{index + 1}",
         kind=str(t.get("kind") or "movie"),
         title=str(t.get("title", "")),
         series=str(t.get("series", "")),
@@ -259,15 +296,62 @@ def _entry_in(t: Any) -> Entry:
         release_name=str(t.get("release_name", "")),
         manifests=manifests,
         drm=[
-            Drm(str(d.get("system", "")).lower(), str(d.get("pssh", "")), str(d.get("wrm_header", "")))
+            Drm(
+                str(d.get("system", "")).lower(),
+                str(d.get("pssh", "")),
+                str(d.get("wrm_header", "")),
+                extras={k: v for k, v in d.items() if k not in _DRM_FIELDS},
+            )
             for d in t.get("drm") or []
             if isinstance(d, dict)
         ],
-        keys={_hex(k): _hex(v) for k, v in (t.get("keys") or {}).items()},
+        keys=_keys_in(t.get("keys")),
         chapters=list(t.get("chapters") or []),
         tracks=list(t.get("tracks") or []),
-        extensions={k: v for k, v in t.items() if k.startswith("x-")},
+        extensions={k: v for k, v in t.items() if k not in _ENTRY_FIELDS},
     )
+
+
+UNDERSTOOD: frozenset[str] = frozenset()
+"""The ``crit`` tokens this reader knows. A reader that adds a feature adds its token here."""
+
+
+def _check_crit(t: dict[str, Any]) -> None:
+    """A title names in ``crit`` the fields a reader must understand to use it at all."""
+    if "crit" not in t:
+        return
+    crit = t["crit"]
+    if not isinstance(crit, list) or not crit or not all(isinstance(x, str) and x for x in crit):
+        raise ExportError("crit is not a list of field names")
+    if len(set(crit)) != len(crit):
+        raise ExportError("crit names the same field twice")
+    for token in crit:
+        if token in _ENTRY_FIELDS or token in ("id", "kind", "crit"):
+            raise ExportError(f"crit names {token}, which every reader already understands")
+        if token not in t:
+            raise ExportError(f"crit names {token}, which the title does not carry")
+        if token not in UNDERSTOOD:
+            raise ExportError(f"this reader does not understand {token}, which the title requires")
+
+
+_MANIFEST_FIELDS = frozenset(Manifest.__dataclass_fields__)
+_DRM_FIELDS = frozenset(Drm.__dataclass_fields__)
+_ENTRY_FIELDS = frozenset(Entry.__dataclass_fields__)
+
+
+def _headers(raw: Any) -> dict[str, str]:
+    """The headers a reader may send, as strings.
+
+    A null value would reach the wire as the string "None", so the header goes instead. A
+    ``Cookie`` or ``Authorization`` goes too: the file travels between tools, and one
+    tool's session is not another's to replay.
+    """
+    if not isinstance(raw, dict):
+        return {}
+    return {str(k): str(v) for k, v in raw.items() if v is not None and str(k).lower() not in _SESSION_HEADERS}
+
+
+_SESSION_HEADERS = frozenset({"cookie", "authorization"})
 
 
 def _int(v: Any) -> int | None:
@@ -281,6 +365,31 @@ def _int(v: Any) -> int | None:
 
 def _hex(s: Any) -> str:
     return str(s).strip().lower().replace("-", "")
+
+
+def _merge_key(keys: dict[str, str], kid: Any, key: Any) -> None:
+    """Put one pair into ``keys``. Two different content keys for one KID raises, never overwrites.
+
+    Skips an empty or null KID or content key: a legacy track that never licensed holds one.
+    """
+    if not kid or not key:
+        return
+    k, v = _hex(kid), _hex(key)
+    if keys.setdefault(k, v) != v:
+        # the KID comes from the file, so the message shows only a sane length of it
+        raise KeyConflict(f"KID {k[:40]} has two different keys")
+
+
+def _keys_in(items: Any) -> dict[str, str]:
+    """The ``keys`` object, built one pair at a time, so a KID that repeats with a new value raises."""
+    if items is None:
+        return {}
+    if not isinstance(items, dict):
+        raise ExportError("keys is not an object")
+    keys: dict[str, str] = {}
+    for kid, key in items.items():
+        _merge_key(keys, kid, key)
+    return keys
 
 
 def guess_type(url: str) -> str:
@@ -302,11 +411,14 @@ def from_unidl_v1(raw: dict[str, Any]) -> Document:
         generator={"app": str(raw.get("app", "unidl"))},
         created=str(raw.get("created", "")),
     )
-    for t in raw.get("titles") or []:
+    for i, t in enumerate(raw.get("titles") or []):
         meta = t.get("title") or {}
         kind = str(meta.get("kind") or "movie")
         drm = t.get("drm") or {}
-        pairs = [str(p).partition(":") for p in t.get("keys") or []]
+        keys: dict[str, str] = {}
+        for pair in t.get("keys") or []:
+            kid, _, key = str(pair).partition(":")
+            _merge_key(keys, kid, key)
         extras = {
             k: t[k]
             for k in (
@@ -320,10 +432,14 @@ def from_unidl_v1(raw: dict[str, Any]) -> Document:
                 "manifest_base_url",
                 "proxy",
                 "is_live",
+                "hls_key",
+                "hls_iv",
+                "hls_method",
+                "clear",
             )
             if t.get(k)
         }
-        headers = dict(t.get("headers") or {})
+        headers = _headers(t.get("headers"))
         manifests = [Manifest(str(u), "", headers, "extra") for u in t.get("alternate_manifest_urls") or []]
         if t.get("manifest_url"):
             manifests.insert(0, Manifest(str(t["manifest_url"]), "", headers))
@@ -333,7 +449,9 @@ def from_unidl_v1(raw: dict[str, Any]) -> Document:
             manifests.insert(0, Manifest("x-unidl:json_manifest", "", headers))
         doc.add(
             Entry(
-                id=str(meta.get("id", "")),
+                # unidl does not insist on an id; without a fallback two id-less titles
+                # would land on the same Document.add slot and the first one's keys would go
+                id=str(meta.get("id") or "") or f"unidl-{i + 1}",
                 kind=kind,
                 title=str(meta.get("episode_name") or meta.get("name", ""))
                 if kind == "episode"
@@ -351,7 +469,7 @@ def from_unidl_v1(raw: dict[str, Any]) -> Document:
                 drm=[Drm(str(drm.get("system", "")).lower(), str(drm.get("pssh", "")), str(drm.get("wrm_header", "")))]
                 if drm
                 else [],
-                keys={_hex(k): _hex(v) for k, _, v in pairs if k and v},
+                keys=keys,
                 chapters=list(t.get("chapters") or []),
                 extensions={"x-unidl": extras} if extras else {},
             )
@@ -370,19 +488,21 @@ def from_unshackle_v2(raw: dict[str, Any]) -> Document:
         tracks = t.get("tracks") or {}
         primary = str(t.get("manifest_url", ""))
         manifests = [Manifest(primary, str(t.get("manifest_type", "")).lower(), role="primary")] if primary else []
-        seen = {primary.split("?")[0]}
+        seen = {primary}
         drm: list[Drm] = []
         keys: dict[str, str] = {}
         for tr in tracks.values():
             url = str(tr.get("url", ""))
-            if tr.get("descriptor") in ("DASH", "ISM") and url and url.split("?")[0] not in seen:
-                seen.add(url.split("?")[0])
+            if tr.get("descriptor") in ("DASH", "ISM") and url and url not in seen:
+                seen.add(url)
                 manifests.append(Manifest(url, str(tr["descriptor"]).lower(), role="extra"))
             for d in tr.get("drm") or []:
-                pssh = str(d.get("pssh_b64", ""))
-                if pssh and all(x.pssh != pssh for x in drm):
-                    drm.append(Drm(str(d.get("system", "")).lower(), pssh))
-            keys.update({_hex(k): _hex(v) for k, v in (tr.get("keys") or {}).items()})
+                # ClearKey (and AES) name a system with no PSSH; only a nameless empty entry is noise
+                system, pssh = str(d.get("system", "")).lower(), str(d.get("pssh_b64", ""))
+                if (system or pssh) and all((x.system, x.pssh) != (system, pssh) for x in drm):
+                    drm.append(Drm(system, pssh))
+            for kid, key in (tr.get("keys") or {}).items():
+                _merge_key(keys, kid, key)
         kind = str(meta.get("type") or "movie")
         doc.add(
             Entry(

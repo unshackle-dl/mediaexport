@@ -133,8 +133,73 @@ def test_unknown_fields_and_extensions_are_kept() -> None:
         ],
     }
     doc = me.loads(json.dumps(raw))
-    assert doc.titles[0].extensions == {"x-foo": {"a": 1}}
-    assert json.loads(me.dumps(doc))["titles"][0]["x-foo"] == {"a": 1}
+    assert doc.titles[0].extensions == {"x-foo": {"a": 1}, "new": 2}
+    again = json.loads(me.dumps(doc))["titles"][0]
+    assert again["x-foo"] == {"a": 1} and again["new"] == 2
+
+
+def test_unknown_manifest_and_drm_fields_survive_a_read_modify_write() -> None:
+    manifest = {"url": "https://a/b.m3u8", "type": "hls", "media_sequence": 0, "encrypted": False}
+    drm = {"system": "aes-128", "key": "k", "iv": "i", "key_uri": "https://a/key", "media_sequence": 0}
+    raw = {
+        "kind": "mediaexport",
+        "version": 1,
+        "service": {"tag": "X"},
+        "titles": [
+            {"id": "1", "kind": "movie", "title": "M", "requires": ["aes"], "manifests": [manifest], "drm": [drm]}
+        ],
+    }
+    entry = me.loads(json.dumps(raw)).titles[0]
+    assert entry.manifests[0].extras == {"media_sequence": 0, "encrypted": False}
+    assert entry.drm[0].extras == {"key": "k", "iv": "i", "key_uri": "https://a/key", "media_sequence": 0}
+    entry.title = "Renamed"
+    doc = me.Document(service_tag="X", titles=[entry])
+    again = json.loads(me.dumps(doc))["titles"][0]
+    assert again["title"] == "Renamed" and again["requires"] == ["aes"]
+    assert again["manifests"] == [manifest] and again["drm"] == [drm]
+
+
+def test_dumps_rejects_a_document_the_reader_would_refuse() -> None:
+    doc = me.Document(service_tag="X")
+    doc.add(me.Entry("1", "movie", "a", manifests=[me.Manifest("u")], keys={"k": "1"}))
+    doc.add(me.Entry("2", "movie", "b", manifests=[me.Manifest("u")], keys={"k": "2"}))
+    with pytest.raises(me.ExportError, match="KID k"):
+        me.dumps(doc)
+
+
+@pytest.mark.parametrize("keys", ["5", "true", '"abc"', '["ab"]', "[]"])
+def test_keys_that_are_not_an_object_are_rejected(keys: str) -> None:
+    title = '{"id": "1", "kind": "movie", "title": "M", "manifests": [{"url": "u"}], "keys": ' + keys + "}"
+    text = '{"kind": "mediaexport", "version": 1, "service": {"tag": "X"}, "titles": [' + title + "]}"
+    with pytest.raises(me.ExportError, match="keys is not an object"):
+        me.loads(text)
+
+
+def test_a_null_key_on_one_track_is_not_a_conflict() -> None:
+    raw = {
+        "version": 2,
+        "service": "SVC",
+        "titles": {
+            "1": {
+                "meta": {"type": "movie", "name": "M"},
+                "manifest_url": "https://a/b.mpd",
+                "tracks": {
+                    "v": {"id": "v", "keys": {"01" * 16: None}},
+                    "a": {"id": "a", "keys": {"01" * 16: "a1" * 16}},
+                },
+            }
+        },
+    }
+    assert me.loads(json.dumps(raw)).titles[0].keys == {"01" * 16: "a1" * 16}
+
+
+def test_add_key_normalises_and_rejects_a_conflict() -> None:
+    e = me.Entry("1", "movie", "M", manifests=[me.Manifest("u")])
+    e.add_key("0A-" + "01" * 15, "A1" * 16)
+    e.add_key("0a" + "01" * 15, "a1" * 16)
+    assert e.keys == {"0a" + "01" * 15: "a1" * 16}
+    with pytest.raises(me.ExportError, match="two different keys"):
+        e.add_key("0a" + "01" * 15, "b2" * 16)
 
 
 def test_direct_url_title_needs_no_manifest() -> None:
@@ -170,3 +235,235 @@ def test_guess_type(url: str, expected: str) -> None:
 @pytest.mark.parametrize("ts,ms", [("00:01:02.500", 62500), ("1:02", 62000), (62.5, 62500), (62500, 62500)])
 def test_timestamp_to_ms(ts, ms) -> None:
     assert me.ts_ms(ts) == ms
+
+
+def test_a_kid_that_repeats_inside_one_title_raises() -> None:
+    kid = "0A" + "01" * 15
+    raw = {
+        "kind": "mediaexport",
+        "version": 1,
+        "service": {"tag": "X"},
+        "titles": [
+            {
+                "id": "1",
+                "kind": "movie",
+                "title": "M",
+                "manifests": [{"url": "https://a/b.mpd"}],
+                "keys": {kid: "a1" * 16, kid.lower().replace("0a", "0a-"): "b2" * 16},
+            }
+        ],
+    }
+    with pytest.raises(me.ExportError, match="two different keys"):
+        me.loads(json.dumps(raw))
+
+
+def test_unidl_duplicate_kid_in_one_title_raises() -> None:
+    raw = {
+        "kind": "unidl-export",
+        "version": 1,
+        "service": "SVC",
+        "titles": [
+            {
+                "title": {"id": "1", "kind": "movie", "name": "M"},
+                "manifest_url": "https://a/b.mpd",
+                "keys": [f"{'01' * 16}:{'a1' * 16}", f"{'01' * 16}:{'b2' * 16}"],
+            }
+        ],
+    }
+    with pytest.raises(me.ExportError, match="two different keys"):
+        me.loads(json.dumps(raw))
+
+
+def test_unshackle_tracks_that_disagree_on_a_kid_raise() -> None:
+    raw = {
+        "version": 2,
+        "service": "SVC",
+        "titles": {
+            "1": {
+                "meta": {"type": "movie", "name": "M"},
+                "manifest_url": "https://a/b.mpd",
+                "tracks": {
+                    "v": {"id": "v", "keys": {"01" * 16: "a1" * 16}},
+                    "a": {"id": "a", "keys": {"01" * 16: "b2" * 16}},
+                },
+            }
+        },
+    }
+    with pytest.raises(me.ExportError, match="two different keys"):
+        me.loads(json.dumps(raw))
+
+
+def test_two_profiles_on_one_endpoint_stay_two_manifests() -> None:
+    raw = {
+        "version": 2,
+        "service": "SVC",
+        "titles": {
+            "1": {
+                "meta": {"type": "movie", "name": "M"},
+                "manifest_url": "https://a/manifest?profile=hd",
+                "manifest_type": "DASH",
+                "tracks": {
+                    "v": {"id": "v", "descriptor": "DASH", "url": "https://a/manifest?profile=uhd"},
+                },
+            }
+        },
+    }
+    entry = me.loads(json.dumps(raw)).titles[0]
+    assert [m.url for m in entry.manifests] == ["https://a/manifest?profile=hd", "https://a/manifest?profile=uhd"]
+
+
+def test_unidl_titles_without_an_id_stay_apart() -> None:
+    raw = {
+        "kind": "unidl-export",
+        "version": 1,
+        "service": "SVC",
+        "titles": [
+            {
+                "title": {"kind": "movie", "name": "A"},
+                "manifest_url": "https://a/1.mpd",
+                "keys": [f"{'01' * 16}:{'a1' * 16}"],
+            },
+            {
+                "title": {"kind": "movie", "name": "B"},
+                "manifest_url": "https://a/2.mpd",
+                "keys": [f"{'02' * 16}:{'b2' * 16}"],
+            },
+        ],
+    }
+    doc = me.loads(json.dumps(raw))
+    assert [e.title for e in doc.titles] == ["A", "B"]
+    assert len(doc.key_pool()) == 2
+
+
+def test_unidl_hls_aes_fields_survive_under_the_extension() -> None:
+    raw = {
+        "kind": "unidl-export",
+        "version": 1,
+        "service": "SVC",
+        "titles": [
+            {
+                "title": {"id": "1", "kind": "movie", "name": "M"},
+                "manifest_url": "https://a/b.m3u8",
+                "hls_key": "00" * 16,
+                "hls_iv": "11" * 16,
+                "hls_method": "AES-128",
+                "clear": True,
+            }
+        ],
+    }
+    x = me.loads(json.dumps(raw)).titles[0].ext("unidl")
+    assert (x["hls_key"], x["hls_iv"], x["hls_method"], x["clear"]) == ("00" * 16, "11" * 16, "AES-128", True)
+
+
+def test_unshackle_drm_without_a_pssh_is_kept_once() -> None:
+    raw = {
+        "version": 2,
+        "service": "SVC",
+        "titles": {
+            "1": {
+                "meta": {"type": "movie", "name": "M"},
+                "manifest_url": "https://a/b.m3u8",
+                "tracks": {
+                    "v": {"id": "v", "drm": [{"system": "clearkey"}]},
+                    "a": {"id": "a", "drm": [{"system": "clearkey"}, {"system": "widevine", "pssh_b64": "AAAA"}]},
+                },
+            }
+        },
+    }
+    assert [(d.system, d.pssh) for d in me.loads(json.dumps(raw)).titles[0].drm] == [
+        ("clearkey", ""),
+        ("widevine", "AAAA"),
+    ]
+
+
+def test_a_cookie_or_null_header_is_dropped_on_read_and_on_write() -> None:
+    raw = {
+        "kind": "mediaexport",
+        "version": 1,
+        "service": {"tag": "X"},
+        "titles": [
+            {
+                "id": "1",
+                "kind": "movie",
+                "title": "M",
+                "manifests": [{"url": "u", "headers": {"Cookie": "sid=1", "X-Null": None, "Referer": "https://a/"}}],
+            }
+        ],
+    }
+    entry = me.loads(json.dumps(raw)).titles[0]
+    assert entry.manifests[0].headers == {"Referer": "https://a/"}
+    entry.manifests[0].headers["cookie"] = "sid=2"
+    doc = me.Document(service_tag="X", titles=[entry])
+    assert json.loads(me.dumps(doc))["titles"][0]["manifests"][0]["headers"] == {"Referer": "https://a/"}
+
+
+def test_a_key_conflict_is_its_own_error() -> None:
+    doc = me.Document(service_tag="X")
+    doc.add(me.Entry("1", "movie", "a", manifests=[me.Manifest("u")], keys={"k": "1"}))
+    doc.add(me.Entry("2", "movie", "b", manifests=[me.Manifest("u")], keys={"k": "2"}))
+    with pytest.raises(me.KeyConflict):
+        me.dumps(doc)
+    assert issubclass(me.KeyConflict, me.ExportError)
+
+
+def test_an_authorization_header_is_dropped_like_a_cookie() -> None:
+    raw = {
+        "kind": "mediaexport",
+        "version": 1,
+        "service": {"tag": "X"},
+        "titles": [
+            {
+                "id": "1",
+                "kind": "movie",
+                "title": "M",
+                "manifests": [{"url": "u", "headers": {"authorization": "Bearer t", "User-Agent": "ua"}}],
+            }
+        ],
+    }
+    assert me.loads(json.dumps(raw)).titles[0].manifests[0].headers == {"User-Agent": "ua"}
+
+
+def test_titles_without_an_id_stay_apart() -> None:
+    raw = {
+        "kind": "mediaexport",
+        "version": 1,
+        "service": {"tag": "X"},
+        "titles": [
+            {"kind": "movie", "title": "A", "manifests": [{"url": "https://a/1.mpd"}]},
+            {"kind": "movie", "title": "B", "manifests": [{"url": "https://a/2.mpd"}]},
+        ],
+    }
+    doc = me.loads(json.dumps(raw))
+    assert [(e.id, e.title) for e in doc.titles] == [("title-1", "A"), ("title-2", "B")]
+    assert doc.get("title-2") is not None
+
+
+def _crit_title(**extra: object) -> str:
+    body: dict[str, object] = {"id": "1", "kind": "movie", "title": "M", "manifests": [{"url": "https://a/b.mpd"}]}
+    body.update(extra)
+    return json.dumps({"kind": "mediaexport", "version": 1, "service": {"tag": "X"}, "titles": [body]})
+
+
+@pytest.mark.parametrize(
+    "title,message",
+    [
+        ({"crit": ["segments"], "segments": [1]}, "does not understand segments"),
+        ({"crit": []}, "not a list"),
+        ({"crit": "segments"}, "not a list"),
+        ({"crit": ["a", "a"], "a": 1}, "same field twice"),
+        ({"crit": ["title"]}, "every reader already understands"),
+        ({"crit": ["ghost"]}, "does not carry"),
+    ],
+)
+def test_crit_refuses_a_title_this_reader_cannot_use(title: dict, message: str) -> None:
+    with pytest.raises(me.ExportError, match=message):
+        me.loads(_crit_title(**title))
+
+
+def test_a_crit_token_this_reader_knows_is_accepted_and_kept(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(me, "UNDERSTOOD", frozenset({"segments"}))
+    entry = me.loads(_crit_title(crit=["segments"], segments=[{"url": "https://a/1.m4s"}])).titles[0]
+    assert entry.extensions["crit"] == ["segments"]
+    assert json.loads(me.dumps(me.loads(me.dumps(me.Document("X", titles=[entry])))))["titles"][0]["crit"] == [
+        "segments"
+    ]
