@@ -5,7 +5,7 @@ DRM init data, the content keys, and the title metadata. A reader can finish the
 download with no account and no CDM. The reader matches content keys by KID at download time, so
 the file never decides which tracks it takes.
 
-Format: ``kind`` is ``media-export``, ``version`` is an integer bumped only for breaking
+Format: ``kind`` is ``mediaexport``, ``version`` is an integer bumped only for breaking
 changes. A reader accepts any version up to its own, ignores unknown fields, and carries
 ``x-<app>`` blocks through untouched. ``loads`` converts the legacy ``unidl-export`` v1
 and unshackle v2 shapes on read and never writes them.
@@ -21,7 +21,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-KIND = "media-export"
+KIND = "mediaexport"
 VERSION = 1
 
 __all__ = [
@@ -176,7 +176,7 @@ def write(path: Path | str, doc: Document) -> Path:
 
 
 def loads(text: str) -> Document:
-    """Read a shared export, or convert a legacy unidl v1 / unshackle v2 file."""
+    """Read a mediaexport file, or convert a legacy unidl v1 / unshackle v2 file."""
     try:
         raw = json.loads(text)
     except (TypeError, ValueError) as exc:

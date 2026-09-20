@@ -110,11 +110,11 @@ def test_unidl_alternate_manifests_become_extras() -> None:
     "text,msg",
     [
         ("[]", "not an export"),
-        ('{"kind": "other"}', "not a media-export"),
-        ('{"kind": "media-export", "version": 99, "service": {"tag": "X"}, "titles": [{}]}', "newer"),
-        ('{"kind": "media-export", "version": 1, "service": {}, "titles": [{}]}', "which service"),
-        ('{"kind": "media-export", "version": 1, "service": {"tag": "X"}, "titles": []}', "no titles"),
-        ('{"kind": "media-export", "version": 1, "service": {"tag": "X"}, "titles": [{"id": "1"}]}', "no manifest"),
+        ('{"kind": "other"}', "not a mediaexport"),
+        ('{"kind": "mediaexport", "version": 99, "service": {"tag": "X"}, "titles": [{}]}', "newer"),
+        ('{"kind": "mediaexport", "version": 1, "service": {}, "titles": [{}]}', "which service"),
+        ('{"kind": "mediaexport", "version": 1, "service": {"tag": "X"}, "titles": []}', "no titles"),
+        ('{"kind": "mediaexport", "version": 1, "service": {"tag": "X"}, "titles": [{"id": "1"}]}', "no manifest"),
     ],
 )
 def test_rejections_name_the_reason(text: str, msg: str) -> None:
@@ -124,7 +124,7 @@ def test_rejections_name_the_reason(text: str, msg: str) -> None:
 
 def test_unknown_fields_and_extensions_are_kept() -> None:
     raw = {
-        "kind": "media-export",
+        "kind": "mediaexport",
         "version": 1,
         "service": {"tag": "X"},
         "future_field": 1,
@@ -139,7 +139,7 @@ def test_unknown_fields_and_extensions_are_kept() -> None:
 
 def test_direct_url_title_needs_no_manifest() -> None:
     raw = {
-        "kind": "media-export",
+        "kind": "mediaexport",
         "version": 1,
         "service": {"tag": "X"},
         "titles": [{"id": "1", "kind": "movie", "title": "M", "tracks": [{"type": "video", "url": "https://a/v.mp4"}]}],

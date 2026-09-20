@@ -11,7 +11,7 @@ Used by [unshackle](https://github.com/unshackle-dl/unshackle) and
 ```python
 import mediaexport as me
 
-doc = me.read("export.json")          # media-export, or legacy unidl v1 / unshackle v2
+doc = me.read("export.json")          # mediaexport, or legacy unidl v1 / unshackle v2
 for entry in doc.titles:
     print(entry.series, entry.title, entry.primary.url, entry.keys)
 
@@ -30,7 +30,7 @@ me.write("export.json", doc)          # atomic, owner-only permissions
 
 ```jsonc
 {
-  "kind": "media-export",
+  "kind": "mediaexport",
   "version": 1,
   "generator": {"app": "yourtool", "version": "1.0"},
   "created": "2026-09-12T14:04:19",
