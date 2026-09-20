@@ -371,10 +371,14 @@ def _merge_key(keys: dict[str, str], kid: Any, key: Any) -> None:
     """Put one pair into ``keys``. Two different content keys for one KID raises, never overwrites.
 
     Skips an empty or null KID or content key: a legacy track that never licensed holds one.
+    An all-zero KID is the same thing: a licence that returned no KID reads back as sixteen
+    zero bytes, so two titles would otherwise collide on it and take the file down with them.
     """
     if not kid or not key:
         return
     k, v = _hex(kid), _hex(key)
+    if not k.strip("0"):
+        return
     if keys.setdefault(k, v) != v:
         # the KID comes from the file, so the message shows only a sane length of it
         raise KeyConflict(f"KID {k[:40]} has two different keys")

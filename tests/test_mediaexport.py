@@ -467,3 +467,19 @@ def test_a_crit_token_this_reader_knows_is_accepted_and_kept(monkeypatch: pytest
     assert json.loads(me.dumps(me.loads(me.dumps(me.Document("X", titles=[entry])))))["titles"][0]["crit"] == [
         "segments"
     ]
+
+
+def test_an_all_zero_kid_never_conflicts() -> None:
+    zero = "0" * 32
+    raw = {
+        "kind": "mediaexport",
+        "version": 1,
+        "service": {"tag": "X"},
+        "titles": [
+            {"id": "1", "kind": "movie", "title": "M", "manifests": [{"url": "u"}], "keys": {zero: "a1" * 16}},
+            {"id": "2", "kind": "movie", "title": "N", "manifests": [{"url": "u"}], "keys": {zero: "b2" * 16}},
+        ],
+    }
+    doc = me.loads(json.dumps(raw))
+    assert doc.key_pool() == {}
+    assert all(e.keys == {} for e in doc.titles)
