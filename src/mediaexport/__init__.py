@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -160,7 +161,8 @@ class Document:
 
 def dumps(doc: Document) -> str:
     """Serialise ``doc``. A document the reader would refuse raises here, not at the next read."""
-    doc.key_pool()
+    for kid, key in doc.key_pool().items():
+        _merge_key({}, kid, key)
     raw: dict[str, Any] = {
         "kind": KIND,
         "version": VERSION,
@@ -212,19 +214,29 @@ def loads(text: str) -> Document:
     """Read a mediaexport file, or convert a legacy unidl v1 / unshackle v2 file."""
     try:
         raw = json.loads(text)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, RecursionError) as exc:
         raise ExportError(f"not valid JSON ({exc})") from exc
     if not isinstance(raw, dict):
         raise ExportError("not an export")
     kind = raw.get("kind")
     if kind == "unidl-export":
-        doc = from_unidl_v1(raw)
+        doc = _legacy(from_unidl_v1, raw, "unidl v1")
     elif kind is None and raw.get("version") == 2 and isinstance(raw.get("titles"), dict):
-        doc = from_unshackle_v2(raw)
+        doc = _legacy(from_unshackle_v2, raw, "unshackle v2")
     else:
         doc = _media_export_in(raw)
     doc.key_pool()
     return doc
+
+
+def _legacy(convert: Callable[[dict[str, Any]], Document], raw: dict[str, Any], name: str) -> Document:
+    """Run a legacy converter. It reads the file as its shape should be, so a bad shape raises ``ExportError``."""
+    try:
+        return convert(raw)
+    except ExportError:
+        raise
+    except (AttributeError, TypeError, ValueError, KeyError, OverflowError) as exc:
+        raise ExportError(f"not a usable {name} export ({type(exc).__name__}: {str(exc)[:80]})") from exc
 
 
 def _media_export_in(raw: dict[str, Any]) -> Document:
@@ -233,7 +245,7 @@ def _media_export_in(raw: dict[str, Any]) -> Document:
         raise ExportError(f"not a {KIND} file")
     try:
         version = int(raw.get("version", 0))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         raise ExportError("version is not a number") from None
     if version > VERSION:
         raise ExportError(f"version {version} is newer than this reader ({VERSION})")
@@ -247,7 +259,7 @@ def _media_export_in(raw: dict[str, Any]) -> Document:
         service_tag=str(svc["tag"]),
         service_name=str(svc.get("name", "")),
         region=str(raw.get("region", "")),
-        generator=dict(raw.get("generator") or {}),
+        generator=dict(raw["generator"]) if isinstance(raw.get("generator"), dict) else {},
         created=str(raw.get("created", "")),
         titles=[_entry_in(t, i) for i, t in enumerate(titles)],
     )
@@ -274,11 +286,12 @@ def _entry_in(t: Any, index: int) -> Entry:
             role=str(m.get("role", "")),
             extras={k: v for k, v in m.items() if k not in _MANIFEST_FIELDS},
         )
-        for m in t.get("manifests") or []
-        if isinstance(m, dict) and m.get("url")
+        for m in _rows(t.get("manifests"))
+        if m.get("url")
     ]
+    tracks = _rows(t.get("tracks"))
     # a DRM-free title of direct file URLs has no manifest; its tracks carry the URLs
-    if not manifests and not any(isinstance(r, dict) and r.get("url") for r in t.get("tracks") or []):
+    if not manifests and not any(r.get("url") for r in tracks):
         raise ExportError(f"{t.get('title') or t.get('id') or 'a title'}: no manifest to fetch")
     return Entry(
         # two id-less titles would otherwise land on one Document.add slot and one would go
@@ -302,12 +315,11 @@ def _entry_in(t: Any, index: int) -> Entry:
                 str(d.get("wrm_header", "")),
                 extras={k: v for k, v in d.items() if k not in _DRM_FIELDS},
             )
-            for d in t.get("drm") or []
-            if isinstance(d, dict)
+            for d in _rows(t.get("drm"))
         ],
         keys=_keys_in(t.get("keys")),
-        chapters=list(t.get("chapters") or []),
-        tracks=list(t.get("tracks") or []),
+        chapters=_chapters_in(t.get("chapters")),
+        tracks=tracks,
         extensions={k: v for k, v in t.items() if k not in _ENTRY_FIELDS},
     )
 
@@ -354,12 +366,31 @@ def _headers(raw: Any) -> dict[str, str]:
 _SESSION_HEADERS = frozenset({"cookie", "authorization"})
 
 
+def _rows(v: Any) -> list[dict[str, Any]]:
+    """The objects in a list field. A consumer reads each row as an object, so anything else goes."""
+    return [r for r in v if isinstance(r, dict)] if isinstance(v, list) else []
+
+
+def _chapters_in(v: Any) -> list[dict[str, Any]]:
+    """The chapters with an integer ``start_ms``. A chapter without one goes."""
+    out = []
+    for c in _rows(v):
+        start = _int(c.get("start_ms"))
+        if start is None:
+            continue
+        row = c | {"start_ms": start}
+        if c.get("title") is not None:
+            row["title"] = str(c["title"])
+        out.append(row)
+    return out
+
+
 def _int(v: Any) -> int | None:
     if v is None or v == "":
         return None
     try:
         return int(v)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
@@ -370,6 +401,9 @@ def _hex(s: Any) -> str:
 def _merge_key(keys: dict[str, str], kid: Any, key: Any) -> None:
     """Put one pair into ``keys``. Two different content keys for one KID raises, never overwrites.
 
+    A KID or content key that is not 32 hex digits once normalised raises: a reader turns
+    each KID into a UUID and hands each key to a decrypter that takes 16 bytes.
+
     Skips an empty or null KID or content key: a legacy track that never licensed holds one.
     An all-zero KID is the same thing: a licence that returned no KID reads back as sixteen
     zero bytes, so two titles would otherwise collide on it and take the file down with them.
@@ -377,11 +411,17 @@ def _merge_key(keys: dict[str, str], kid: Any, key: Any) -> None:
     if not kid or not key:
         return
     k, v = _hex(kid), _hex(key)
+    # the values come from the file, so a message shows only a sane length of them
+    for name, value in (("KID", k), ("key", v)):
+        if len(value) != 32 or not set(value) <= _HEX_DIGITS:
+            raise ExportError(f"{name} {value[:40]} is not 32 hex digits")
     if not k.strip("0"):
         return
     if keys.setdefault(k, v) != v:
-        # the KID comes from the file, so the message shows only a sane length of it
         raise KeyConflict(f"KID {k[:40]} has two different keys")
+
+
+_HEX_DIGITS = frozenset("0123456789abcdef")
 
 
 def _keys_in(items: Any) -> dict[str, str]:
@@ -420,6 +460,8 @@ def from_unidl_v1(raw: dict[str, Any]) -> Document:
         kind = str(meta.get("kind") or "movie")
         drm = t.get("drm") or {}
         keys: dict[str, str] = {}
+        if not isinstance(t.get("keys") or [], list):
+            raise ExportError("keys is not a list")
         for pair in t.get("keys") or []:
             kid, _, key = str(pair).partition(":")
             _merge_key(keys, kid, key)
@@ -474,7 +516,7 @@ def from_unidl_v1(raw: dict[str, Any]) -> Document:
                 if drm
                 else [],
                 keys=keys,
-                chapters=list(t.get("chapters") or []),
+                chapters=_chapters_in(t.get("chapters")),
                 extensions={"x-unidl": extras} if extras else {},
             )
         )

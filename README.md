@@ -80,7 +80,7 @@ me.write("export.json", doc)  # atomic, owner-only permissions
   and never a null value: the package drops them on read and on write, so one tool cannot
   replay another's session.
 - DRM and keys are title-level. `keys` is an object of `kid_hex: key_hex`, lower-case, no
-  dashes; any other shape rejects the file. A reader matches by KID at download time. It
+  dashes, 32 hex digits each; any other shape rejects the file. A reader matches by KID at download time. It
   reports a track whose KID is missing and does not download it. A reader normalises a KID
   before it compares it. A KID that has two different keys rejects the file, whether the
   two are in one title, in two titles, or come out of a legacy conversion. A KID of all
@@ -95,7 +95,10 @@ me.write("export.json", doc)  # atomic, owner-only permissions
   progress continues, and the file stays readable.
 - `pssh` is the full box, base64, for Widevine and PlayReady alike. `wrm_header` is
   optional beside it.
-- `chapters` use `start_ms`, an integer, and optional `title`, `end_ms`, `kind`.
+- `manifests`, `drm`, `chapters` and `tracks` are lists of objects. A reader drops an entry
+  that is not an object, and reads a field that is not a list as an empty list.
+- `chapters` use `start_ms`, an integer, and optional `title`, `end_ms`, `kind`. A reader
+  drops a chapter with no integer `start_ms`.
 - `tracks` is informational. The reader reselects from the live manifest. `type` is
   `video`, `audio` or `subtitle`. A track with a `url` is a side-load the manifest does not
   know about: a reader adds it to what the manifest gives. For a subtitle side-load, `codec`
@@ -115,6 +118,7 @@ me.write("export.json", doc)  # atomic, owner-only permissions
 ## Legacy formats
 
 `loads()` converts `kind: unidl-export` (v1) and unshackle's `version: 2` shape in
-memory. They are read, never written. A unidl title with no id of its own gets one from its
+memory. They are read, never written. A legacy file that does not have the shape of its
+format raises `ExportError`. A unidl title with no id of its own gets one from its
 position in the file, so two of them stay two titles. Fields with no shared meaning, such as
 unidl's HLS AES `hls_key`, `hls_iv` and `hls_method`, come through under `x-unidl`.

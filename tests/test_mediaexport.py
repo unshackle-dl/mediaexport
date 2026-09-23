@@ -96,13 +96,15 @@ def test_unidl_alternate_manifests_become_extras() -> None:
                 "manifest_url": "https://a/1.mpd",
                 "alternate_manifest_urls": ["https://a/2.mpd"],
                 "merge_manifests": True,
-                "headers": {"H": "v"},
+                "headers": {"Referer": "https://a/"},
             }
         ],
     }
     e = me.loads(json.dumps(raw)).titles[0]
     assert e.primary.url == "https://a/1.mpd"
-    assert [(m.url, m.role, m.headers) for m in e.manifests[1:]] == [("https://a/2.mpd", "extra", {"H": "v"})]
+    assert [(m.url, m.role, m.headers) for m in e.manifests[1:]] == [
+        ("https://a/2.mpd", "extra", {"Referer": "https://a/"})
+    ]
     assert e.ext("unidl")["merge_manifests"] is True
 
 
@@ -438,7 +440,7 @@ def test_titles_without_an_id_stay_apart() -> None:
     assert doc.get("title-2") is not None
 
 
-def _crit_title(**extra: object) -> str:
+def _one_title(**extra: object) -> str:
     body: dict[str, object] = {"id": "1", "kind": "movie", "title": "M", "manifests": [{"url": "https://a/b.mpd"}]}
     body.update(extra)
     return json.dumps({"kind": "mediaexport", "version": 1, "service": {"tag": "X"}, "titles": [body]})
@@ -457,12 +459,12 @@ def _crit_title(**extra: object) -> str:
 )
 def test_crit_refuses_a_title_this_reader_cannot_use(title: dict, message: str) -> None:
     with pytest.raises(me.ExportError, match=message):
-        me.loads(_crit_title(**title))
+        me.loads(_one_title(**title))
 
 
 def test_a_crit_token_this_reader_knows_is_accepted_and_kept(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(me, "UNDERSTOOD", frozenset({"segments"}))
-    entry = me.loads(_crit_title(crit=["segments"], segments=[{"url": "https://a/1.m4s"}])).titles[0]
+    entry = me.loads(_one_title(crit=["segments"], segments=[{"url": "https://a/1.m4s"}])).titles[0]
     assert entry.extensions["crit"] == ["segments"]
     assert json.loads(me.dumps(me.loads(me.dumps(me.Document("X", titles=[entry])))))["titles"][0]["crit"] == [
         "segments"
@@ -483,3 +485,121 @@ def test_an_all_zero_kid_never_conflicts() -> None:
     doc = me.loads(json.dumps(raw))
     assert doc.key_pool() == {}
     assert all(e.keys == {} for e in doc.titles)
+
+
+@pytest.mark.parametrize(
+    "kid,key",
+    [
+        ("zz", "a1" * 16),
+        ("01" * 15, "a1" * 16),
+        ("01" * 17, "a1" * 16),
+        ("0g" * 16, "a1" * 16),
+        ("01" * 16, "zz"),
+        ("01" * 16, "a1" * 15),
+        ("01" * 16, True),
+    ],
+)
+def test_a_kid_or_key_that_is_not_32_hex_digits_is_rejected(kid: str, key: object) -> None:
+    with pytest.raises(me.ExportError, match="not 32 hex digits"):
+        me.loads(_one_title(keys={kid: key}))
+
+
+def test_a_malformed_unidl_key_pair_is_rejected() -> None:
+    raw = {
+        "kind": "unidl-export",
+        "version": 1,
+        "service": "SVC",
+        "titles": [{"title": {"id": "1"}, "keys": ["zz:11"]}],
+    }
+    with pytest.raises(me.ExportError, match="not 32 hex digits"):
+        me.loads(json.dumps(raw))
+
+
+@pytest.mark.parametrize("field", ["tracks", "chapters", "drm"])
+@pytest.mark.parametrize("value", [5, "abc", {"a": 1}, ["x", 1, None, []]])
+def test_a_row_that_is_not_an_object_is_dropped(field: str, value: object) -> None:
+    entry = me.loads(_one_title(**{field: value})).titles[0]
+    assert getattr(entry, field) == []
+
+
+def test_object_rows_survive_beside_dropped_ones() -> None:
+    track = {"type": "video", "codec": "hevc"}
+    entry = me.loads(_one_title(tracks=["x", track], drm=[1, {"system": "widevine"}])).titles[0]
+    assert entry.tracks == [track]
+    assert [d.system for d in entry.drm] == ["widevine"]
+
+
+@pytest.mark.parametrize("manifests", [5, "https://a/b.mpd"])
+def test_manifests_that_are_not_a_list_are_no_manifest(manifests: object) -> None:
+    text = _one_title(manifests=manifests, tracks=5)
+    with pytest.raises(me.ExportError, match="no manifest"):
+        me.loads(text)
+
+
+def test_chapters_read_back_with_an_int_start() -> None:
+    chapters = [
+        {"start_ms": "abc", "title": "bad"},
+        {"title": "no start"},
+        {"start_ms": None},
+        {"start_ms": 0, "title": "A"},
+        {"start_ms": "1500", "title": 7, "end_ms": 2000},
+    ]
+    entry = me.loads(_one_title(chapters=chapters)).titles[0]
+    assert entry.chapters == [{"start_ms": 0, "title": "A"}, {"start_ms": 1500, "title": "7", "end_ms": 2000}]
+
+
+def _unidl(title: object) -> str:
+    return json.dumps({"kind": "unidl-export", "version": 1, "service": "SVC", "titles": [title]})
+
+
+def _v2(title: object) -> str:
+    return json.dumps({"version": 2, "service": "SVC", "titles": {"1": title}})
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        _unidl("x"),
+        _unidl({"title": "x", "manifest_url": "https://a/b.mpd"}),
+        _unidl({"title": {"id": "1"}, "manifest_url": "https://a/b.mpd", "drm": "widevine"}),
+        _unidl({"title": {"id": "1"}, "manifest_url": "https://a/b.mpd", "keys": "abc"}),
+        _unidl({"title": {"id": "1"}, "manifest_url": "https://a/b.mpd", "keys": {"01" * 16: "a1" * 16}}),
+        json.dumps({"kind": "unidl-export", "version": 1, "service": "SVC", "titles": "abc"}),
+        _v2("x"),
+        _v2({"meta": "x", "manifest_url": "https://a/b.mpd"}),
+        _v2({"manifest_url": "https://a/b.mpd", "tracks": ["x"]}),
+        _v2({"manifest_url": "https://a/b.mpd", "tracks": {"v": "x"}}),
+        _v2({"manifest_url": "https://a/b.mpd", "tracks": {"v": {"keys": ["x"]}}}),
+        _v2({"manifest_url": "https://a/b.mpd", "tracks": {"v": {"drm": ["x"]}}}),
+        _v2({"manifest_url": "https://a/b.mpd", "chapters": [{"timestamp": "x:y"}]}),
+        _v2({"manifest_url": "https://a/b.mpd", "chapters": ["x"]}),
+    ],
+)
+def test_a_malformed_legacy_file_raises_export_error(text: str) -> None:
+    with pytest.raises(me.ExportError):
+        me.loads(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "[" * 100_000,
+        _one_title(season=float("inf")),
+        _one_title().replace('"version": 1', '"version": Infinity'),
+        _one_title().replace('"titles"', '"generator": 5, "titles"'),
+        _one_title().replace('"titles"', '"generator": "ab", "titles"'),
+    ],
+)
+def test_hostile_json_raises_export_error_or_reads(text: str) -> None:
+    try:
+        me.loads(text)
+    except me.ExportError:
+        pass
+
+
+def test_dumps_rejects_a_kid_the_reader_would_refuse() -> None:
+    doc = me.Document(
+        service_tag="X", titles=[me.Entry("1", "movie", "M", manifests=[me.Manifest("u")], keys={"zz": "1"})]
+    )
+    with pytest.raises(me.ExportError, match="not 32 hex digits"):
+        me.dumps(doc)
