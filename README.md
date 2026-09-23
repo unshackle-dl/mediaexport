@@ -76,9 +76,10 @@ me.write("export.json", doc)  # atomic, owner-only permissions
   `role: extra`. A writer puts it first. A reader that handles one manifest takes the
   primary and ignores the rest. A reader identifies a manifest by its whole URL: two
   profiles on one endpoint are two manifests. `type` is `dash`, `hls` or `ism`; a reader
-  guesses a missing type from the URL. `headers` never contain `Cookie` or `Authorization`,
-  and never a null value: the package drops them on read and on write, so one tool cannot
-  replay another's session.
+  guesses a missing type from the URL. `headers` hold only the request headers a CDN can
+  gate a manifest on: `User-Agent`, `Referer`, `Origin`, `Accept` and `Accept-Language`,
+  in any case. The package drops every other header, and a null value, on read and on
+  write: an HTTP session can hide in any custom header, and one tool cannot replay another's.
 - DRM and keys are title-level. `keys` is an object of `kid_hex: key_hex`, lower-case, no
   dashes, 32 hex digits each; any other shape rejects the file. A reader matches by KID at download time. It
   reports a track whose KID is missing and does not download it. A reader normalises a KID

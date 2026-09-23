@@ -597,6 +597,30 @@ def test_hostile_json_raises_export_error_or_reads(text: str) -> None:
         pass
 
 
+def test_only_allowlisted_headers_are_kept_on_read_and_on_write() -> None:
+    headers = {
+        "user-agent": "ua",
+        "Referer": "https://a/",
+        "Origin": "https://a",
+        "Accept": "*/*",
+        "Accept-Language": "en",
+        "X-Api-Key": "k",
+        "X-Auth-Token": "t",
+        "X-Session-Id": "s",
+    }
+    kept = {k: headers[k] for k in ("user-agent", "Referer", "Origin", "Accept", "Accept-Language")}
+    entry = me.loads(_one_title(manifests=[{"url": "u", "headers": headers}])).titles[0]
+    assert entry.manifests[0].headers == kept
+    entry.manifests[0].headers = headers
+    doc = me.Document(service_tag="X", titles=[entry])
+    assert json.loads(me.dumps(doc))["titles"][0]["manifests"][0]["headers"] == kept
+
+
+def test_unidl_headers_are_filtered_to_the_allowlist() -> None:
+    raw = {"title": {"id": "1"}, "manifest_url": "https://a/b.mpd", "headers": {"User-Agent": "ua", "X-Token": "t"}}
+    assert me.loads(_unidl(raw)).titles[0].primary.headers == {"User-Agent": "ua"}
+
+
 def test_dumps_rejects_a_kid_the_reader_would_refuse() -> None:
     doc = me.Document(
         service_tag="X", titles=[me.Entry("1", "movie", "M", manifests=[me.Manifest("u")], keys={"zz": "1"})]

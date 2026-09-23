@@ -352,18 +352,19 @@ _ENTRY_FIELDS = frozenset(Entry.__dataclass_fields__)
 
 
 def _headers(raw: Any) -> dict[str, str]:
-    """The headers a reader may send, as strings.
+    """The headers a reader may send, as strings: only those in ``_CDN_HEADERS``.
 
-    A null value would reach the wire as the string "None", so the header goes instead. A
-    ``Cookie`` or ``Authorization`` goes too: the file travels between tools, and one
-    tool's session is not another's to replay.
+    The file travels between tools, and one tool's session is not another's to replay. A session
+    token can hide in any custom header, so the package keeps the few a CDN gates a
+    manifest on and drops the rest. A null value would reach the wire as the string "None",
+    so that header goes too.
     """
     if not isinstance(raw, dict):
         return {}
-    return {str(k): str(v) for k, v in raw.items() if v is not None and str(k).lower() not in _SESSION_HEADERS}
+    return {str(k): str(v) for k, v in raw.items() if v is not None and str(k).lower() in _CDN_HEADERS}
 
 
-_SESSION_HEADERS = frozenset({"cookie", "authorization"})
+_CDN_HEADERS = frozenset({"user-agent", "referer", "origin", "accept", "accept-language"})
 
 
 def _rows(v: Any) -> list[dict[str, Any]]:
