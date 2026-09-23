@@ -124,13 +124,14 @@ me.write("export.json", doc)  # atomic, owner-only permissions
   is refused: it is not in `Document.titles`, so a caller cannot act on it by mistake, and
   `Document.refused` keeps it as it came, with the reason. `dumps()` writes a refused title
   back unchanged, after the others, so a rewrite loses nothing. `Document.add()` replaces a
-  refused title with the same id. The reader does not check the manifests or headers of a
-  refused title. It does read its `keys`, a base field, with the same normalisation and
-  checks: they take part in the KID conflict check of `loads()`, `key_pool()` and `dumps()`,
-  because a reader that has the capability would refuse the conflict. They are only for
-  that check, never for use (`Refused.keys`). A file whose every title is refused still
-  reads, with an empty `titles`. Silence is the reason the rule exists: a reader that
-  ignored `crit` would write a file it could not decrypt.
+  refused title with the same id. A file whose every title is refused still reads, with an
+  empty `titles`. Silence is the reason the rule exists: a reader that ignored `crit` would
+  write a file it could not decrypt.
+- The reader does not check the manifests or headers of a refused title. It does read its
+  `keys`, a base field, with the same normalisation and checks: they take part in the KID
+  conflict check of `loads()`, `key_pool()` and `dumps()`, because a reader that has the
+  capability would refuse the conflict. They are only for that check, never for use
+  (`Refused.keys`).
 - The file holds keys and usually a signed URL: `write()` is atomic and owner-only.
 
 ## Legacy formats
