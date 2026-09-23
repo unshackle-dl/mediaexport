@@ -89,8 +89,9 @@ me.write("export.json", doc)  # atomic, owner-only permissions
   before it compares it. A KID that has two different keys rejects the file, whether the
   two are in one title, in two titles, or come out of a legacy conversion. A KID of all
   zeros is a licence that returned no KID, so a reader drops the pair instead of reading it
-  as a conflict. `dumps()` and
-  `write()` apply the same check, so a writer cannot produce a file the reader refuses. This
+  as a conflict. `dumps()` and `write()` normalise the keys and apply the same checks, so a
+  writer cannot produce a file the reader refuses: two spellings of one KID with one key
+  go out as one pair, and with two different keys they raise. This
   one failure raises `KeyConflict`, an `ExportError`: the file itself is readable, so a
   writer keeps it and reports the conflict, and quarantines only a file it cannot read.
 - A writer adds a content key with `Entry.add_key(kid, key)`, which normalises the pair and raises

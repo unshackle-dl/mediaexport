@@ -390,8 +390,8 @@ def test_a_cookie_or_null_header_is_dropped_on_read_and_on_write() -> None:
 
 def test_a_key_conflict_is_its_own_error() -> None:
     doc = me.Document(service_tag="X")
-    doc.add(me.Entry("1", "movie", "a", manifests=[me.Manifest("u")], keys={"k": "1"}))
-    doc.add(me.Entry("2", "movie", "b", manifests=[me.Manifest("u")], keys={"k": "2"}))
+    doc.add(me.Entry("1", "movie", "a", manifests=[me.Manifest("u")], keys={"01" * 16: "a1" * 16}))
+    doc.add(me.Entry("2", "movie", "b", manifests=[me.Manifest("u")], keys={"01" * 16: "b2" * 16}))
     with pytest.raises(me.KeyConflict):
         me.dumps(doc)
     assert issubclass(me.KeyConflict, me.ExportError)
@@ -636,3 +636,28 @@ TWO_KEYS = f'{{"{KID}": "{"11" * 16}", "{KID}": "{"22" * 16}"}}'
 def test_a_repeated_property_name_is_rejected(text: str) -> None:
     with pytest.raises(me.ExportError, match="more than once"):
         me.loads(text)
+
+
+def _entry(id: str = "1", **keys: str) -> me.Entry:
+    return me.Entry(id, "movie", "M", manifests=[me.Manifest("u")], keys=dict(keys))
+
+
+@pytest.mark.parametrize(
+    "titles",
+    [
+        [_entry(**{"0A" + "01" * 15: "a1" * 16, "0a" + "01" * 15: "b2" * 16})],
+        [_entry(**{"0a-" + "01" * 15: "a1" * 16, "0a" + "01" * 15: "b2" * 16})],
+        [_entry("1", **{"0A" + "01" * 15: "a1" * 16}), _entry("2", **{"0a" + "01" * 15: "b2" * 16})],
+    ],
+)
+def test_dumps_rejects_kids_that_collide_once_normalised(titles: list[me.Entry]) -> None:
+    with pytest.raises(me.KeyConflict):
+        me.dumps(me.Document("X", titles=titles))
+
+
+def test_dumps_writes_keys_the_way_the_reader_reads_them() -> None:
+    kid = "0a" + "01" * 15
+    entry = _entry(**{kid.upper(): "A1" * 16, "0a-" + "01" * 15: "a1" * 16, "0" * 32: "b2" * 16})
+    raw = json.loads(me.dumps(me.Document("X", titles=[entry])))
+    assert raw["titles"][0]["keys"] == {kid: "a1" * 16}
+    assert me.loads(me.dumps(me.Document("X", titles=[entry]))).titles[0].keys == {kid: "a1" * 16}

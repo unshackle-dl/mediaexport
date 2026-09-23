@@ -160,9 +160,18 @@ class Document:
 
 
 def dumps(doc: Document) -> str:
-    """Serialise ``doc``. A document the reader would refuse raises here, not at the next read."""
-    for kid, key in doc.key_pool().items():
-        _merge_key({}, kid, key)
+    """Serialise ``doc``. A document the reader would refuse raises here, not at the next read.
+
+    Keys go out normalised the way the reader reads them, so two spellings of one KID are one
+    KID here too: with one key they collapse, with two they raise ``KeyConflict``.
+    """
+    pool: dict[str, str] = {}
+    titles = []
+    for e in doc.titles:
+        keys = _keys_in(e.keys)
+        for kid, key in keys.items():
+            _merge_key(pool, kid, key)
+        titles.append(_entry_out(e, keys))
     raw: dict[str, Any] = {
         "kind": KIND,
         "version": VERSION,
@@ -172,13 +181,13 @@ def dumps(doc: Document) -> str:
     }
     if doc.region:
         raw["region"] = doc.region
-    raw["titles"] = [_entry_out(e) for e in doc.titles]
+    raw["titles"] = titles
     return json.dumps(raw, indent=2, ensure_ascii=False) + "\n"
 
 
-def _entry_out(e: Entry) -> dict[str, Any]:
+def _entry_out(e: Entry, keys: dict[str, str]) -> dict[str, Any]:
     out: dict[str, Any] = {}
-    for k, v in asdict(e).items():
+    for k, v in (asdict(e) | {"keys": keys}).items():
         if k == "extensions" or v in (None, "", [], {}):
             continue
         if k == "manifests":
