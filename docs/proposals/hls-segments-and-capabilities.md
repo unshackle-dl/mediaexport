@@ -1,7 +1,7 @@
 # Proposal: HLS segments, AES content keys and capabilities
 
-Status: for the unshackle and unidl maintainers to agree on before any code. Nothing here is
-implemented. References are to [RFC 8216](https://www.rfc-editor.org/rfc/rfc8216) (HLS).
+Status: shapes proposed, open questions decided by the unshackle and unidl maintainers (see
+the last section). Only the capability rule of section 3 is implemented. References are to [RFC 8216](https://www.rfc-editor.org/rfc/rfc8216) (HLS).
 
 ## Problem
 
@@ -49,14 +49,19 @@ Proposed title field, a table of content keys:
 
 - `uri` is the absolute key URI as the writer resolved it. `key` is 32 hex digits.
 - `id` is unique in the title. A frozen segment refers to it (section 2).
-- A playlist-backed track (the reader fetches the playlist again) matches each `EXT-X-KEY`
-  by `uri` and takes the IV from the playlist as section 5.2 says. The file stores no IV.
+- The URI only identifies the content key: the key bytes are in the export, so a reader
+  never fetches `uri`. A signed key URI can change its query on each playlist fetch, so a
+  reader matches an `EXT-X-KEY` to an entry by the URI with its query string removed.
+- A playlist-backed track (the reader fetches the playlist again) takes the IV from the
+  playlist as section 5.2 says. The file stores no IV for it.
 - Two entries with one `uri` and two different content keys reject the file, as a KID
   conflict does.
 - `aes_keys` is separate from `keys` and from `key_pool()`: these content keys have no KID.
-- The legacy unidl `drm[].hls_key` and `hls_iv` stay in `Drm.extras`. A converter maps them
-  to `aes_keys` only if the maintainers agree on the scope of that single IV (see open
-  questions).
+- The legacy unidl `drm[].hls_key` and `hls_iv` stay in `Drm.extras` for now. unidl applies
+  `hls_iv` to every segment of the title, so it is one explicit IV for the whole title. When
+  `aes_keys` lands, the unidl converter maps them to one `aes_keys` entry with that explicit
+  title-wide IV (for example an `iv` field on the entry, which overrides section 5.2 for
+  every segment the entry covers).
 
 ## 2. Frozen tracks and source kinds
 
@@ -95,9 +100,11 @@ A frozen row:
 - `range` is `[offset, length]` in bytes. The writer resolves an `EXT-X-BYTERANGE` with no
   offset (section 4.3.2.2) to an absolute offset, so the reader does no arithmetic.
 - `enc` is the encryption of that segment: `method` (`NONE`, `AES-128`, `SAMPLE-AES`), `key`
-  (an `aes_keys` id) and `iv`. The writer always writes the resolved `iv`, from the `IV`
-  attribute or from section 5.2. `seq` stays for information and for a check. A missing
-  `enc` is `NONE`.
+  (an `aes_keys` id) and `iv`. A missing `enc` is `NONE`.
+- A writer MUST write the resolved `iv` on each encrypted frozen segment and map, from the
+  `IV` attribute or from section 5.2. A reader MUST NOT derive an IV for a frozen segment:
+  an encrypted frozen segment with no `iv` is malformed, and the reader refuses it. `seq`
+  is for information only.
 - `maps[]` holds each initialization section once. A segment names its map by id, so a map
   change (a new `EXT-X-MAP`, section 4.3.2.5) is a new id. An encrypted map always has `iv`.
 - `discontinuity: true` marks an `EXT-X-DISCONTINUITY` (section 4.3.2.3) before the segment.
@@ -134,12 +141,9 @@ The package default is none: a newer package does not make a tool claim a featur
 tool did not add. A title that needs a token outside `understood` goes to `doc.refused`, and
 a rewrite keeps it unchanged.
 
-These tokens are capability names, not title fields. The README rule today says each token
-names a field the title carries, and the reader rejects the whole file when it does not.
-This proposal changes the rule to: a token is a capability that the README lists, or
-`x-<app>-<name>` for a private one. The reader then drops the "names a field the title does
-not carry" check. That change must ship in the readers before any writer emits these tokens
-(see open questions).
+These tokens are capability names, not title fields. The reader on this branch already
+applies that rule: it no longer requires a field of the same name. A reader from before this
+branch rejects the whole file on such a token, which fails safe.
 
 ## Version
 
@@ -149,24 +153,29 @@ from before the per-title refusal rejects the whole file, which fails safe. A bu
 necessary only if the maintainers change the meaning of an existing field, for example if a
 `tracks[]` row with a `url` and no `source` stops meaning one complete file.
 
-## Open questions
+## Decisions
 
-1. Capability tokens or field-name tokens? Capability tokens (above) keep the data on the
-   track rows but need the reader check relaxed first. The alternative keeps today's rule:
-   each token is a title field (`"segments": {...}`, `"hls-aes": {...}`) that holds the data,
-   and readers from this branch already refuse only that title.
-2. Key URI match for `source: playlist`: a signed key URI can change on each playlist fetch.
-   Match on the whole URI, the URI without its query, or the position of the `EXT-X-KEY` in
-   the playlist?
-3. Must a writer always write the resolved `iv` on a frozen segment, or may it write only
-   `seq` and let the reader apply section 5.2? This proposal says always resolve.
-4. Are frozen segment URLs expected to outlive their signature? If not, is `segments` worth
-   the size, or only for services whose playlists cannot be fetched again?
-5. The legacy unidl `hls_iv`: does unidl write it only when the playlist has an `IV`
-   attribute, and for which segments? The answer decides if a converter can map it to
-   `aes_keys` and per-segment `enc`, or must leave it in `Drm.extras`.
-6. Key conflicts across refused titles: `key_pool()` skips a refused title, so a writer can
-   add a content key that conflicts with one in a refused title. Should the reader check
-   `keys` of a refused title when that field has the base shape?
-7. Should `SAMPLE-AES-CTR` and `KEYFORMAT` values other than `identity` get their own tokens,
-   or stay out of scope?
+The maintainers decided the open questions:
+
+1. `crit` tokens are capability names (`segments`, `hls-aes`, `sample-aes`), not field
+   names. The reader no longer checks for a field of the same name. The list stays
+   non-empty, with non-empty strings, no duplicates, and no base field, `id`, `kind` or
+   `crit`. A malformed `crit` rejects the file. Implemented.
+2. A reader matches an `EXT-X-KEY` to an `aes_keys` entry by the key URI with its query
+   string removed. The content key bytes and the IV are in the export, so the URI only
+   identifies the content key.
+3. A writer always writes the resolved IV on each frozen segment. A reader never derives an
+   IV for a frozen segment.
+4. unidl's `hls_iv` is one explicit IV for the whole title. It stays in `Drm.extras` until
+   `aes_keys` lands. Then the converter maps it to one `aes_keys` entry with that IV.
+5. The `keys` of a refused title take part in the KID conflict check of `loads()`,
+   `key_pool()` and `dumps()`, with the same normalisation: `keys` is a base field, and a
+   writer must not produce a file that a capable reader rejects. They are for that check
+   only, never for use. Implemented.
+
+Still open:
+
+- Should `SAMPLE-AES-CTR` and `KEYFORMAT` values other than `identity` get their own tokens,
+  or stay out of scope?
+- Are frozen segment URLs expected to outlive their signature? If not, is `segments` worth
+  the size, or only for services whose playlists cannot be fetched again?
