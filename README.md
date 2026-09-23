@@ -121,5 +121,7 @@ me.write("export.json", doc)  # atomic, owner-only permissions
 `loads()` converts `kind: unidl-export` (v1) and unshackle's `version: 2` shape in
 memory. They are read, never written. A legacy file that does not have the shape of its
 format raises `ExportError`. A unidl title with no id of its own gets one from its
-position in the file, so two of them stay two titles. Fields with no shared meaning, such as
-unidl's HLS AES `hls_key`, `hls_iv` and `hls_method`, come through under `x-unidl`.
+position in the file, so two of them stay two titles. Title fields with no shared meaning, such
+as `summary` and `json_manifest`, come through under `x-unidl`. The fields of unidl's `drm`
+object that are not `system`, `pssh` or `wrm_header`, such as its HLS AES `hls_key`, `hls_iv`,
+`hls_method` and `clear`, come through as they are in that `drm[]` entry (`Drm.extras`).

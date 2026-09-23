@@ -337,24 +337,13 @@ def test_unidl_titles_without_an_id_stay_apart() -> None:
     assert len(doc.key_pool()) == 2
 
 
-def test_unidl_hls_aes_fields_survive_under_the_extension() -> None:
-    raw = {
-        "kind": "unidl-export",
-        "version": 1,
-        "service": "SVC",
-        "titles": [
-            {
-                "title": {"id": "1", "kind": "movie", "name": "M"},
-                "manifest_url": "https://a/b.m3u8",
-                "hls_key": "00" * 16,
-                "hls_iv": "11" * 16,
-                "hls_method": "AES-128",
-                "clear": True,
-            }
-        ],
-    }
-    x = me.loads(json.dumps(raw)).titles[0].ext("unidl")
-    assert (x["hls_key"], x["hls_iv"], x["hls_method"], x["clear"]) == ("00" * 16, "11" * 16, "AES-128", True)
+def test_unidl_hls_aes_fields_survive_in_the_drm_entry() -> None:
+    aes = {"hls_key": "00" * 16, "hls_iv": "11" * 16, "hls_method": "AES-128", "clear": False}
+    title = {"title": {"id": "1", "kind": "movie", "name": "M"}, "manifest_url": "https://a/b.m3u8"}
+    entry = me.loads(_unidl(title | {"drm": {"system": "clearkey"} | aes})).titles[0]
+    assert (entry.drm[0].system, entry.drm[0].extras) == ("clearkey", aes)
+    again = json.loads(me.dumps(me.loads(me.dumps(me.Document("X", titles=[entry])))))["titles"][0]
+    assert again["drm"] == [{"system": "clearkey"} | aes]
 
 
 def test_unshackle_drm_without_a_pssh_is_kept_once() -> None:

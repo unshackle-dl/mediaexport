@@ -479,10 +479,6 @@ def from_unidl_v1(raw: dict[str, Any]) -> Document:
                 "manifest_base_url",
                 "proxy",
                 "is_live",
-                "hls_key",
-                "hls_iv",
-                "hls_method",
-                "clear",
             )
             if t.get(k)
         }
@@ -513,7 +509,15 @@ def from_unidl_v1(raw: dict[str, Any]) -> Document:
                 track_number=_int(meta.get("track_number")),
                 release_name=str(t.get("save_name", "")),
                 manifests=manifests,
-                drm=[Drm(str(drm.get("system", "")).lower(), str(drm.get("pssh", "")), str(drm.get("wrm_header", "")))]
+                # unidl keeps its HLS AES fields (hls_key, hls_iv, hls_method, clear) in the drm object
+                drm=[
+                    Drm(
+                        str(drm.get("system", "")).lower(),
+                        str(drm.get("pssh", "")),
+                        str(drm.get("wrm_header", "")),
+                        extras={k: v for k, v in drm.items() if k not in _DRM_FIELDS},
+                    )
+                ]
                 if drm
                 else [],
                 keys=keys,
