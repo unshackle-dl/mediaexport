@@ -616,3 +616,23 @@ def test_dumps_rejects_a_kid_the_reader_would_refuse() -> None:
     )
     with pytest.raises(me.ExportError, match="not 32 hex digits"):
         me.dumps(doc)
+
+
+
+KID = "01" * 16
+TWO_KEYS = f'{{"{KID}": "{"11" * 16}", "{KID}": "{"22" * 16}"}}'
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        _one_title(keys={}).replace('"keys": {}', f'"keys": {TWO_KEYS}'),
+        _one_title().replace('"titles"', f'"keys": {TWO_KEYS}, "titles"'),
+        _one_title().replace('"id": "1"', '"id": "1", "id": "2"'),
+        _one_title().replace('"kind": "mediaexport"', '"kind": "mediaexport", "kind": "mediaexport"'),
+        _unidl({"title": {"id": "1"}, "manifest_url": "u"}).replace('"id": "1"', '"id": "1", "id": "2"'),
+    ],
+)
+def test_a_repeated_property_name_is_rejected(text: str) -> None:
+    with pytest.raises(me.ExportError, match="more than once"):
+        me.loads(text)

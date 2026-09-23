@@ -213,7 +213,9 @@ def write(path: Path | str, doc: Document) -> Path:
 def loads(text: str) -> Document:
     """Read a mediaexport file, or convert a legacy unidl v1 / unshackle v2 file."""
     try:
-        raw = json.loads(text)
+        raw = json.loads(text, object_pairs_hook=_unique_names)
+    except ExportError:
+        raise
     except (TypeError, ValueError, RecursionError) as exc:
         raise ExportError(f"not valid JSON ({exc})") from exc
     if not isinstance(raw, dict):
@@ -227,6 +229,16 @@ def loads(text: str) -> Document:
         doc = _media_export_in(raw)
     doc.key_pool()
     return doc
+
+
+def _unique_names(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """One JSON object. ``json`` keeps the last of two equal names, so a second key for a KID would win unseen."""
+    out: dict[str, Any] = {}
+    for name, value in pairs:
+        if name in out:
+            raise ExportError(f"names {name[:40]} more than once in one object")
+        out[name] = value
+    return out
 
 
 def _legacy(convert: Callable[[dict[str, Any]], Document], raw: dict[str, Any], name: str) -> Document:

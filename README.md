@@ -66,6 +66,9 @@ me.write("export.json", doc)  # atomic, owner-only permissions
 
 - A reader checks `kind` and `version` first. It accepts any version up to its own and
   rejects a newer one. Additive fields never bump the version.
+- A name appears once in each JSON object. A repeated name rejects the file: a JSON parser
+  keeps one of the two values and drops the other, so the reader could miss a second key
+  for one KID.
 - Every title has an `id`, unique in the file: a writer that exports one title twice
   replaces it. A title with no id gets one from its position in the file, so two such titles
   stay two titles. `kind` is `movie`, `episode`, `song` or `clip`; a reader treats an unknown
