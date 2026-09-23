@@ -440,14 +440,13 @@ def _one_title(**extra: object) -> str:
     [
         ({"crit": []}, "not a list"),
         ({"crit": "segments"}, "not a list"),
-        ({"crit": ["a", "a"], "a": 1}, "same field twice"),
+        ({"crit": ["a", "a"], "a": 1}, "same capability twice"),
         ({"crit": ["title"]}, "every reader already understands"),
-        ({"crit": ["ghost"]}, "does not carry"),
     ],
 )
 def test_a_malformed_crit_rejects_the_file(title: dict, message: str) -> None:
     with pytest.raises(me.ExportError, match=message):
-        me.loads(_one_title(**title), understood={"a", "ghost", "segments", "title"})
+        me.loads(_one_title(**title), understood={"a", "segments", "title"})
 
 
 def test_a_crit_token_the_caller_understands_is_accepted_and_kept() -> None:
@@ -666,14 +665,13 @@ def _two_titles(refused: dict) -> str:
     return json.dumps({"kind": "mediaexport", "version": 1, "service": {"tag": "X"}, "titles": [usable, refused]})
 
 
-# no manifest, a key that conflicts with title 1 and an odd header: opaque, so none of it is checked
+# capability tokens with no field of their name, and an odd header: the reader checks only the keys
 REFUSED = {
     "id": "2",
     "kind": "movie",
     "crit": ["segments", "hls-aes"],
-    "segments": [{"url": "https://a/1.ts"}],
-    "hls-aes": {"iv": "x"},
-    "keys": {KID: "b2" * 16},
+    "tracks": [{"type": "video", "source": "segments", "segments": [{"url": "https://a/1.ts"}]}],
+    "keys": {"02" * 16: "b2" * 16},
     "manifests": [{"url": "v", "headers": {"Cookie": "c"}}],
 }
 
@@ -683,7 +681,7 @@ def test_only_the_title_a_crit_names_is_refused() -> None:
     assert [e.id for e in doc.titles] == ["1"]
     assert [r.raw for r in doc.refused] == [REFUSED]
     assert "segments" in doc.refused[0].reason and "hls-aes" in doc.refused[0].reason
-    assert doc.key_pool() == {KID: "a1" * 16}
+    assert doc.key_pool() == {KID: "a1" * 16, "02" * 16: "b2" * 16}
 
 
 def test_a_refused_title_is_written_back_unchanged() -> None:
@@ -695,10 +693,9 @@ def test_a_refused_title_is_written_back_unchanged() -> None:
 
 
 def test_a_caller_that_understands_every_token_gets_the_title() -> None:
-    refused = REFUSED | {"keys": {"02" * 16: "b2" * 16}}
-    doc = me.loads(_two_titles(refused), understood=frozenset({"segments", "hls-aes"}))
+    doc = me.loads(_two_titles(REFUSED), understood=frozenset({"segments", "hls-aes"}))
     assert [e.id for e in doc.titles] == ["1", "2"] and doc.refused == []
-    assert me.loads(_two_titles(refused), understood={"segments"}).refused[0].raw == refused
+    assert me.loads(_two_titles(REFUSED), understood={"segments"}).refused[0].raw == REFUSED
 
 
 def test_a_file_whose_every_title_is_refused_still_reads() -> None:
@@ -717,3 +714,29 @@ def test_add_replaces_a_refused_title_with_the_same_id() -> None:
     doc = me.loads(_two_titles(REFUSED))
     doc.add(_entry("2"))
     assert [e.id for e in doc.titles] == ["1", "2"] and doc.refused == []
+
+
+def test_a_crit_token_is_a_capability_not_a_field() -> None:
+    text = _one_title(crit=["hls-aes"])
+    assert me.loads(text).refused[0].raw["crit"] == ["hls-aes"]
+    assert [e.id for e in me.loads(text, understood={"hls-aes"}).titles] == ["1"]
+
+
+@pytest.mark.parametrize("kid", [KID, KID.upper(), "0101-" + KID[4:]])
+def test_a_refused_title_that_disagrees_on_a_kid_rejects_the_file(kid: str) -> None:
+    with pytest.raises(me.KeyConflict):
+        me.loads(_two_titles(REFUSED | {"keys": {kid: "b2" * 16}}))
+
+
+def test_a_malformed_key_in_a_refused_title_rejects_the_file() -> None:
+    with pytest.raises(me.ExportError, match="not 32 hex digits"):
+        me.loads(_two_titles(REFUSED | {"keys": {"zz": "b2" * 16}}))
+
+
+def test_a_writer_cannot_add_a_kid_that_conflicts_with_a_refused_title() -> None:
+    doc = me.loads(_two_titles(REFUSED))
+    doc.titles[0].add_key("02" * 16, "c3" * 16)
+    with pytest.raises(me.KeyConflict):
+        doc.key_pool()
+    with pytest.raises(me.KeyConflict):
+        me.dumps(doc)

@@ -7,7 +7,7 @@ the file never decides which tracks it takes.
 
 Format: ``kind`` is ``mediaexport``, ``version`` is an integer bumped only for breaking
 changes. A reader accepts any version up to its own, ignores unknown fields, and carries
-``x-<app>`` blocks through untouched. A title whose ``crit`` names a field the caller does
+``x-<app>`` blocks through untouched. A title whose ``crit`` names a capability the caller does
 not understand is refused and kept as it came. ``loads`` converts the legacy
 ``unidl-export`` v1 and unshackle v2 shapes on read and never writes them.
 """
@@ -133,13 +133,18 @@ class Entry:
 
 @dataclass
 class Refused:
-    """A title this reader may not use: its ``crit`` names a field the caller does not understand.
+    """A title this reader may not use: its ``crit`` names a capability the caller does not have.
 
-    ``raw`` is the title as it came, written back unchanged. ``reason`` names the fields.
+    ``raw`` is the title as it came, written back unchanged. ``reason`` names the tokens.
     """
 
     raw: dict[str, Any]
     reason: str
+
+    @property
+    def keys(self) -> dict[str, str]:
+        """The title's ``keys``, normalised. Only for conflict checks: a caller never uses them."""
+        return _keys_in(self.raw.get("keys"))
 
 
 @dataclass
@@ -167,14 +172,14 @@ class Document:
         self.titles.append(entry)
 
     def key_pool(self) -> dict[str, str]:
-        """Every KID:KEY in ``titles``. A KID with two different keys is a writer bug and raises.
+        """Every KID:KEY in the file. A KID with two different keys is a writer bug and raises.
 
-        A refused title is opaque: its keys may be in a shape this reader does not know, so
-        they are not in the pool.
+        A refused title's keys are in the pool too: a reader that understands that title
+        would refuse the conflict, so a writer must not produce it.
         """
         pool: dict[str, str] = {}
-        for e in self.titles:
-            for k, v in e.keys.items():
+        for keys in [e.keys for e in self.titles] + [r.keys for r in self.refused]:
+            for k, v in keys.items():
                 if pool.setdefault(k, v) != v:
                     raise KeyConflict(f"KID {k[:40]} has two different keys")
         return pool
@@ -193,6 +198,9 @@ def dumps(doc: Document) -> str:
         for kid, key in keys.items():
             _merge_key(pool, kid, key)
         titles.append(_entry_out(e, keys))
+    for r in doc.refused:
+        for kid, key in r.keys.items():
+            _merge_key(pool, kid, key)
     raw: dict[str, Any] = {
         "kind": KIND,
         "version": VERSION,
@@ -380,19 +388,17 @@ def _entry_in(t: dict[str, Any], index: int) -> Entry:
 
 
 def _crit(t: dict[str, Any]) -> list[str]:
-    """The fields a reader must understand to use the title at all. A malformed ``crit`` rejects the file."""
+    """The capabilities a reader must have to use the title at all. A malformed ``crit`` rejects the file."""
     if "crit" not in t:
         return []
     crit = t["crit"]
     if not isinstance(crit, list) or not crit or not all(isinstance(x, str) and x for x in crit):
-        raise ExportError("crit is not a list of field names")
+        raise ExportError("crit is not a list of capability names")
     if len(set(crit)) != len(crit):
-        raise ExportError("crit names the same field twice")
+        raise ExportError("crit names the same capability twice")
     for token in crit:
         if token in _ENTRY_FIELDS or token in ("id", "kind", "crit"):
             raise ExportError(f"crit names {token}, which every reader already understands")
-        if token not in t:
-            raise ExportError(f"crit names {token}, which the title does not carry")
     return crit
 
 
