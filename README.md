@@ -108,6 +108,13 @@ me.write("export.json", doc)  # atomic, owner-only permissions
   `video`, `audio` or `subtitle`. A track with a `url` is a side-load the manifest does not
   know about: a reader adds it to what the manifest gives. For a subtitle side-load, `codec`
   is the file format (`srt`, `vtt`, `ttml`, `ass`, `ssa`, `smi`) and `language` is set.
+- A `tracks[]` row can list `kids`, the KIDs its media is encrypted with, normalised and
+  checked as the KIDs in `keys` are. A `kids` that is not a list, or a malformed KID in it,
+  rejects the file. A reader drops an all-zero KID and a repeated KID. A `kids` with no KID
+  left, or no `kids`, is unknown: a reader then gives the track every key of the title. A
+  DRM-free track has no `kids`. A KID with no pair in `keys` is valid, because a key vault
+  can hold that key. `Entry.keys_for(track_id)` applies this rule. The field is additive, so
+  it needs no version bump and no `crit` token: an older reader ignores it.
 - A reader ignores unknown fields and writes them back as they came, at title level and
   inside each `manifests[]` and `drm[]` entry (`Entry.extensions`, `Manifest.extras`,
   `Drm.extras`). Every other app carries an `x-<app>` block through untouched. A tool that

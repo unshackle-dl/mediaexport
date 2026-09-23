@@ -130,6 +130,12 @@ class Entry:
         """Put one KID:KEY into ``keys``, normalised. A second, different key for one KID raises."""
         _merge_key(self.keys, kid, key)
 
+    def keys_for(self, track_id: str) -> dict[str, str]:
+        """The keys for the KIDs a ``tracks`` row lists. A row with no ``kids``, or no row, gets all of ``keys``."""
+        row = next((r for r in self.tracks if str(r.get("id", "")) == track_id), {})
+        kids = _kids_in(row.get("kids"))
+        return {k: self.keys[k] for k in kids if k in self.keys} if kids else dict(self.keys)
+
 
 @dataclass
 class Refused:
@@ -216,7 +222,7 @@ def dumps(doc: Document) -> str:
 
 def _entry_out(e: Entry, keys: dict[str, str]) -> dict[str, Any]:
     out: dict[str, Any] = {}
-    for k, v in (asdict(e) | {"keys": keys}).items():
+    for k, v in (asdict(e) | {"keys": keys, "tracks": _tracks_in(e.tracks)}).items():
         if k == "extensions" or v in (None, "", [], {}):
             continue
         if k == "manifests":
@@ -352,7 +358,7 @@ def _entry_in(t: dict[str, Any], index: int) -> Entry:
         for m in _rows(t.get("manifests"))
         if m.get("url")
     ]
-    tracks = _rows(t.get("tracks"))
+    tracks = _tracks_in(_rows(t.get("tracks")))
     # a DRM-free title of direct file URLs has no manifest; its tracks carry the URLs
     if not manifests and not any(r.get("url") for r in tracks):
         raise ExportError(f"{t.get('title') or t.get('id') or 'a title'}: no manifest to fetch")
@@ -428,6 +434,31 @@ def _rows(v: Any) -> list[dict[str, Any]]:
     return [r for r in v if isinstance(r, dict)] if isinstance(v, list) else []
 
 
+def _tracks_in(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The rows with ``kids`` normalised. A row whose ``kids`` comes out empty loses the field: it is unknown."""
+    out = []
+    for r in rows:
+        if "kids" in r:
+            kids = _kids_in(r["kids"])
+            r = {k: v for k, v in r.items() if k != "kids"} | ({"kids": kids} if kids else {})
+        out.append(r)
+    return out
+
+
+def _kids_in(v: Any) -> list[str]:
+    """A ``kids`` list, each KID normalised and checked as in ``keys``, once each. An all-zero KID goes."""
+    if v is None:
+        return []
+    if not isinstance(v, list):
+        raise ExportError("kids is not a list")
+    out: list[str] = []
+    for kid in v:
+        k = _hex32("KID", kid)
+        if k.strip("0") and k not in out:
+            out.append(k)
+    return out
+
+
 def _chapters_in(v: Any) -> list[dict[str, Any]]:
     """The chapters with an integer ``start_ms``. A chapter without one goes."""
     out = []
@@ -467,15 +498,19 @@ def _merge_key(keys: dict[str, str], kid: Any, key: Any) -> None:
     """
     if not kid or not key:
         return
-    k, v = _hex(kid), _hex(key)
-    # the values come from the file, so a message shows only a sane length of them
-    for name, value in (("KID", k), ("key", v)):
-        if len(value) != 32 or not set(value) <= _HEX_DIGITS:
-            raise ExportError(f"{name} {value[:40]} is not 32 hex digits")
+    k, v = _hex32("KID", kid), _hex32("key", key)
     if not k.strip("0"):
         return
     if keys.setdefault(k, v) != v:
         raise KeyConflict(f"KID {k[:40]} has two different keys")
+
+
+def _hex32(name: str, raw: Any) -> str:
+    value = _hex(raw)
+    # the value comes from the file, so a message shows only a sane length of it
+    if len(value) != 32 or not set(value) <= _HEX_DIGITS:
+        raise ExportError(f"{name} {value[:40]} is not 32 hex digits")
+    return value
 
 
 _HEX_DIGITS = frozenset("0123456789abcdef")
@@ -627,9 +662,7 @@ def from_unshackle_v2(raw: dict[str, Any]) -> Document:
                 manifests=manifests,
                 drm=drm,
                 keys=keys,
-                tracks=[{"id": str(tr.get("id", "")), "url": str(tr["url"])} for tr in tracks.values() if tr.get("url")]
-                if not manifests
-                else [],
+                tracks=_tracks_in([_v2_row(tr) for tr in tracks.values() if tr.get("url")]) if not manifests else [],
                 chapters=[
                     {"start_ms": ts_ms(c["timestamp"]), "title": c.get("name") or ""}
                     for c in t.get("chapters") or []
@@ -646,6 +679,14 @@ def from_unshackle_v2(raw: dict[str, Any]) -> Document:
             )
         )
     return doc
+
+
+def _v2_row(tr: dict[str, Any]) -> dict[str, Any]:
+    """A direct-URL v2 track as a ``tracks`` row, with the KIDs of its ``keys`` and ``drm``."""
+    kids = list(tr.get("keys") or {}) + [k for d in tr.get("drm") or [] for k in d.get("kids") or []]
+    # a v2 track that never licensed can hold an empty KID; _merge_key skips it, so this does too
+    kids = [k for k in kids if k]
+    return {"id": str(tr.get("id", "")), "url": str(tr["url"])} | ({"kids": kids} if kids else {})
 
 
 def ts_ms(ts: Any) -> int:

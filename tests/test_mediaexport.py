@@ -740,3 +740,85 @@ def test_a_writer_cannot_add_a_kid_that_conflicts_with_a_refused_title() -> None
         doc.key_pool()
     with pytest.raises(me.KeyConflict):
         me.dumps(doc)
+
+
+VIDEO_KID, AUDIO_KID = "0a" * 16, "0b" * 16
+TWO_TRACK_KEYS = {VIDEO_KID: "a1" * 16, AUDIO_KID: "b2" * 16}
+
+
+def test_track_kids_are_normalised_and_collapse() -> None:
+    kids = [VIDEO_KID.upper(), "0a0a0a0a-" + VIDEO_KID[8:], "0" * 32, "00000000-0000-0000-0000-000000000000"]
+    entry = me.loads(_one_title(tracks=[{"id": "v", "kids": kids}])).titles[0]
+    assert entry.tracks == [{"id": "v", "kids": [VIDEO_KID]}]
+
+
+@pytest.mark.parametrize("kids", [["zz"], [VIDEO_KID[:30]], [None], [""], [5]])
+def test_a_malformed_track_kid_rejects_the_file(kids: list) -> None:
+    with pytest.raises(me.ExportError, match="not 32 hex digits"):
+        me.loads(_one_title(tracks=[{"id": "v", "kids": kids}]))
+
+
+@pytest.mark.parametrize("kids", [VIDEO_KID, {VIDEO_KID: "a1" * 16}, 5, True])
+def test_track_kids_that_are_not_a_list_reject_the_file(kids: object) -> None:
+    with pytest.raises(me.ExportError, match="kids is not a list"):
+        me.loads(_one_title(tracks=[{"id": "v", "kids": kids}]))
+
+
+@pytest.mark.parametrize("kids", [None, [], ["0" * 32]])
+def test_track_kids_that_come_out_empty_are_unknown(kids: object) -> None:
+    entry = me.loads(_one_title(keys=TWO_TRACK_KEYS, tracks=[{"id": "v", "kids": kids}])).titles[0]
+    assert entry.tracks == [{"id": "v"}]
+    assert entry.keys_for("v") == TWO_TRACK_KEYS
+
+
+def test_track_kids_round_trip_normalised() -> None:
+    entry = _entry(**TWO_TRACK_KEYS)
+    entry.tracks = [{"id": "v", "kids": [VIDEO_KID.upper(), VIDEO_KID]}, {"id": "a", "kids": [AUDIO_KID]}]
+    raw = json.loads(me.dumps(me.Document("X", titles=[entry])))
+    assert raw["titles"][0]["tracks"] == [{"id": "v", "kids": [VIDEO_KID]}, {"id": "a", "kids": [AUDIO_KID]}]
+    assert entry.tracks[0]["kids"] == [VIDEO_KID.upper(), VIDEO_KID]
+    again = me.loads(me.dumps(me.Document("X", titles=[entry]))).titles[0]
+    assert again.keys_for("a") == {AUDIO_KID: "b2" * 16}
+
+
+def test_dumps_rejects_a_track_kid_the_reader_would_refuse() -> None:
+    entry = _entry()
+    entry.tracks = [{"id": "v", "kids": ["zz"]}]
+    with pytest.raises(me.ExportError, match="not 32 hex digits"):
+        me.dumps(me.Document("X", titles=[entry]))
+
+
+def test_keys_for_takes_the_tracks_kids_else_the_whole_title() -> None:
+    entry = _entry(**TWO_TRACK_KEYS)
+    entry.tracks = [{"id": "v", "kids": [VIDEO_KID]}, {"id": "s", "type": "subtitle"}]
+    assert entry.keys_for("v") == {VIDEO_KID: "a1" * 16}
+    assert entry.keys_for("s") == TWO_TRACK_KEYS
+    assert entry.keys_for("nope") == TWO_TRACK_KEYS
+
+
+def test_a_track_kid_with_no_key_in_the_file_is_allowed() -> None:
+    entry = me.loads(_one_title(keys=TWO_TRACK_KEYS, tracks=[{"id": "v", "kids": [VIDEO_KID, "0c" * 16]}])).titles[0]
+    assert entry.tracks[0]["kids"] == [VIDEO_KID, "0c" * 16]
+    assert entry.keys_for("v") == {VIDEO_KID: "a1" * 16}
+
+
+def test_a_refused_titles_track_kids_are_not_read() -> None:
+    refused = REFUSED | {"tracks": [{"id": "v", "kids": ["zz"]}]}
+    assert me.loads(_two_titles(refused)).refused[0].raw == refused
+
+
+def test_unshackle_v2_direct_url_tracks_keep_their_kids() -> None:
+    title = {
+        "meta": {"type": "movie", "name": "M"},
+        "tracks": {
+            "v": {"id": "v", "url": "https://a/v.mp4", "keys": {VIDEO_KID.upper(): "a1" * 16}},
+            "a": {"id": "a", "url": "https://a/a.mp4", "drm": [{"system": "widevine", "kids": [AUDIO_KID]}]},
+            "s": {"id": "s", "url": "https://a/s.vtt", "keys": {"": None}},
+        },
+    }
+    entry = me.loads(_v2(title)).titles[0]
+    assert entry.tracks == [
+        {"id": "v", "url": "https://a/v.mp4", "kids": [VIDEO_KID]},
+        {"id": "a", "url": "https://a/a.mp4", "kids": [AUDIO_KID]},
+        {"id": "s", "url": "https://a/s.vtt"},
+    ]
