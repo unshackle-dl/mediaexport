@@ -359,7 +359,7 @@ def _entry_in(t: dict[str, Any], index: int) -> Entry:
         if m.get("url")
     ]
     tracks = _tracks_in(_rows(t.get("tracks")))
-    # a DRM-free title of direct file URLs has no manifest; its tracks carry the URLs
+    # a title of direct file URLs has no manifest; its tracks carry the URLs
     if not manifests and not any(r.get("url") for r in tracks):
         raise ExportError(f"{t.get('title') or t.get('id') or 'a title'}: no manifest to fetch")
     return Entry(
@@ -435,12 +435,13 @@ def _rows(v: Any) -> list[dict[str, Any]]:
 
 
 def _tracks_in(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """The rows with ``kids`` normalised. A row whose ``kids`` comes out empty loses the field: it is unknown."""
+    """The rows with ``kids`` and ``headers`` normalised. A field that comes out empty goes: it is unknown."""
     out = []
     for r in rows:
-        if "kids" in r:
-            kids = _kids_in(r["kids"])
-            r = {k: v for k, v in r.items() if k != "kids"} | ({"kids": kids} if kids else {})
+        for name, clean in (("kids", _kids_in), ("headers", _headers)):
+            if name in r:
+                value = clean(r[name])
+                r = {k: v for k, v in r.items() if k != name} | ({name: value} if value else {})
         out.append(r)
     return out
 
@@ -575,12 +576,16 @@ def from_unidl_v1(raw: dict[str, Any]) -> Document:
         }
         headers = _headers(t.get("headers"))
         manifests = [Manifest(str(u), "", headers, "extra") for u in t.get("alternate_manifest_urls") or []]
+        rows: list[dict[str, Any]] = []
         if t.get("manifest_url"):
             manifests.insert(0, Manifest(str(t["manifest_url"]), "", headers))
-        # unidl's synthetic json_manifest is app-private; a placeholder URL keeps the entry
-        # readable so the keys and metadata are not lost, and x-unidl carries the real thing
         elif t.get("json_manifest"):
-            manifests.insert(0, Manifest("x-unidl:json_manifest", "", headers))
+            rows = _unidl_file_rows(t["json_manifest"], headers)
+            # a json_manifest that is not all whole files needs segments, which the format
+            # cannot hold yet; a placeholder URL keeps the keys and metadata readable, and
+            # x-unidl carries the real thing
+            if not rows:
+                manifests.insert(0, Manifest("x-unidl:json_manifest", "", headers))
         doc.add(
             Entry(
                 # unidl does not insist on an id; without a fallback two id-less titles
@@ -613,10 +618,65 @@ def from_unidl_v1(raw: dict[str, Any]) -> Document:
                 else [],
                 keys=keys,
                 chapters=_chapters_in(t.get("chapters")),
+                tracks=_tracks_in(rows),
                 extensions={"x-unidl": extras} if extras else {},
             )
         )
     return doc
+
+
+def _unidl_file_rows(manifest: dict[str, Any], headers: dict[str, str]) -> list[dict[str, Any]]:
+    """The ``tracks`` rows for a unidl ``json_manifest`` whose every track is one whole file, else none.
+
+    unidl freezes a manifest into this shape. A track whose one segment is its own URL, with no
+    byte range and no initialization segment, is a complete file, so a ``url`` row describes it.
+    Any other track needs its segments, so the title then gets no rows at all: a partial ladder
+    would drop what the reader cannot see.
+    """
+    rows: list[dict[str, Any]] = []
+    for kind in ("video", "audio", "subtitle"):
+        for tr in manifest.get(f"{kind}_tracks") or []:
+            if not _unidl_whole_file(tr):
+                return []
+            width, _, height = str(tr.get("resolution") or "").partition("x")
+            fps = tr.get("frame_rate")
+            row = {
+                "id": str(tr.get("id") or ""),
+                "type": kind,
+                "url": str(tr["url"]),
+                "codec": str(tr.get("codecs") or ""),
+                "language": str(tr.get("language") or ""),
+                "bitrate": _int(tr.get("bandwidth")),
+                "width": _int(width),
+                "height": _int(height),
+                "fps": float(fps) if isinstance(fps, (int, float)) and not isinstance(fps, bool) else None,
+                "range": _UNIDL_RANGES.get(str(tr.get("video_range") or "").upper(), ""),
+                "channels": str(tr.get("channels") or ""),
+                "atmos": True if tr.get("audio_atmos") else None,
+                "headers": headers,
+                "kids": tr.get("key_ids") or ([tr["kid"]] if tr.get("kid") else None),
+            }
+            rows.append({k: v for k, v in row.items() if v not in (None, "", [], {})})
+    return rows
+
+
+def _unidl_whole_file(tr: Any) -> bool:
+    if not isinstance(tr, dict) or not tr.get("url") or tr.get("is_live"):
+        return False
+    segments = tr.get("segments") or []
+    if not segments:
+        return True
+    if len(segments) != 1 or not isinstance(segments[0], dict):
+        return False
+    seg = segments[0]
+    return seg.get("url") == tr["url"] and seg.get("index") in (0, None) and set(seg) <= _UNIDL_FILE_SEGMENT
+
+
+_UNIDL_RANGES = {"SDR": "sdr", "HLG": "hlg", "HDR10": "hdr10", "HDR10+": "hdr10p", "DV": "dv"}
+
+# the fields unidl writes on a segment that is the whole file; any other (byte_range, key_uri,
+# data_base64, ...) means the segment is not the file
+_UNIDL_FILE_SEGMENT = frozenset({"url", "duration", "index", "encrypted", "encryption_scheme", "kid"})
 
 
 def from_unshackle_v2(raw: dict[str, Any]) -> Document:

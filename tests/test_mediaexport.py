@@ -822,3 +822,126 @@ def test_unshackle_v2_direct_url_tracks_keep_their_kids() -> None:
         {"id": "a", "url": "https://a/a.mp4", "kids": [AUDIO_KID]},
         {"id": "s", "url": "https://a/s.vtt"},
     ]
+
+
+def _json_track(url: str, **fields: object) -> dict:
+    """A unidl json_manifest track whose one segment is the whole file."""
+    segment = {"url": url, "duration": 60.0, "index": 0, "encrypted": True, "encryption_scheme": "CENC"}
+    return {"url": url, "manifest_type": "dash", "is_live": False, "segments": [segment]} | fields
+
+
+def _drop_kind(track: dict) -> dict:
+    return {k: v for k, v in track.items() if k != "_kind"}
+
+
+def _json_manifest_title(*tracks: dict, **extra: object) -> dict:
+    return {
+        "title": {"id": "1", "kind": "movie", "name": "M"},
+        "keys": [f"{VIDEO_KID}:{'a1' * 16}", f"{AUDIO_KID}:{'b2' * 16}"],
+        "headers": {"User-Agent": "UA", "Cookie": "c"},
+        "drm": {"system": "playready", "wrm_header": "<WRMHEADER/>"},
+        "json_manifest": {"video_tracks": [], "audio_tracks": [], "subtitle_tracks": [], "_unidl_media_manifest": 1}
+        | {
+            kind: [_drop_kind(t) for t in tracks if t["_kind"] == kind]
+            for kind in ("video_tracks", "audio_tracks", "subtitle_tracks")
+        },
+    } | extra
+
+
+VIDEO = _json_track(
+    "https://a/v.mp4",
+    _kind="video_tracks",
+    id="v",
+    bandwidth=15000000,
+    codecs="dvh1.05.07",
+    resolution="3840x2160",
+    frame_rate=25.0,
+    video_range="DV",
+    kid=VIDEO_KID.upper(),
+    key_ids=[VIDEO_KID.upper()],
+)
+AUDIO = _json_track(
+    "https://a/a.mp4",
+    _kind="audio_tracks",
+    id="a",
+    language="en",
+    bandwidth=578523,
+    codecs="ec-3",
+    channels="6",
+    audio_atmos=1,
+    kid=AUDIO_KID,
+)
+SUBTITLE = _json_track(
+    "https://a/s.mp4", _kind="subtitle_tracks", id="s", language="fr", codecs="stpp", encrypted=False
+)
+
+
+def test_a_unidl_json_manifest_of_whole_files_becomes_track_rows() -> None:
+    entry = me.loads(_unidl(_json_manifest_title(VIDEO, AUDIO, SUBTITLE))).titles[0]
+    assert entry.manifests == []
+    ua = {"User-Agent": "UA"}
+    assert entry.tracks == [
+        {
+            "id": "v",
+            "type": "video",
+            "url": "https://a/v.mp4",
+            "codec": "dvh1.05.07",
+            "bitrate": 15000000,
+            "width": 3840,
+            "height": 2160,
+            "fps": 25.0,
+            "range": "dv",
+            "headers": ua,
+            "kids": [VIDEO_KID],
+        },
+        {
+            "id": "a",
+            "type": "audio",
+            "url": "https://a/a.mp4",
+            "codec": "ec-3",
+            "language": "en",
+            "bitrate": 578523,
+            "channels": "6",
+            "atmos": True,
+            "headers": ua,
+            "kids": [AUDIO_KID],
+        },
+        {"id": "s", "type": "subtitle", "url": "https://a/s.mp4", "codec": "stpp", "language": "fr", "headers": ua},
+    ]
+    assert entry.keys_for("a") == {AUDIO_KID: "b2" * 16}
+    assert entry.ext("unidl")["json_manifest"]["video_tracks"][0]["id"] == "v"
+
+
+def test_json_manifest_track_rows_survive_a_round_trip() -> None:
+    doc = me.loads(_unidl(_json_manifest_title(VIDEO, AUDIO, SUBTITLE)))
+    again = me.loads(me.dumps(doc))
+    assert again.titles[0].tracks == doc.titles[0].tracks
+    assert again.titles[0].primary is None
+
+
+@pytest.mark.parametrize(
+    "segments",
+    [
+        [{"url": "https://a/v.mp4", "index": -1}, {"url": "https://a/v1.m4s", "index": 0}],
+        [{"url": "https://a/v.mp4", "index": 0, "byte_range": [0, 999]}],
+        [{"url": "https://a/other.mp4", "index": 0}],
+    ],
+)
+def test_a_json_manifest_with_real_segments_keeps_the_placeholder(segments: list) -> None:
+    entry = me.loads(_unidl(_json_manifest_title(VIDEO | {"segments": segments}, AUDIO))).titles[0]
+    assert entry.tracks == []
+    assert entry.primary is not None and entry.primary.url == "x-unidl:json_manifest"
+
+
+def test_a_live_json_manifest_keeps_the_placeholder() -> None:
+    entry = me.loads(_unidl(_json_manifest_title(VIDEO | {"is_live": True}))).titles[0]
+    assert entry.tracks == [] and entry.primary.url == "x-unidl:json_manifest"
+
+
+def test_track_headers_are_filtered_to_the_allowlist() -> None:
+    title = {"id": "1", "tracks": [{"id": "v", "url": "https://a/v.mp4", "headers": {"Referer": "r", "Cookie": "c"}}]}
+    raw = {"kind": "mediaexport", "version": 1, "service": {"tag": "X"}, "titles": [title]}
+    doc = me.loads(json.dumps(raw))
+    assert doc.titles[0].tracks[0]["headers"] == {"Referer": "r"}
+    doc.titles[0].tracks[0]["headers"]["Authorization"] = "t"
+    assert json.loads(me.dumps(doc))["titles"][0]["tracks"][0]["headers"] == {"Referer": "r"}

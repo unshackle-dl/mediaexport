@@ -107,7 +107,18 @@ me.write("export.json", doc)  # atomic, owner-only permissions
 - `tracks` is informational. The reader reselects from the live manifest. `type` is
   `video`, `audio` or `subtitle`. A track with a `url` is a side-load the manifest does not
   know about: a reader adds it to what the manifest gives. For a subtitle side-load, `codec`
-  is the file format (`srt`, `vtt`, `ttml`, `ass`, `ssa`, `smi`) and `language` is set.
+  is the file format (`srt`, `vtt`, `ttml`, `ass`, `ssa`, `smi`, or `stpp` and `wvtt` for
+  TTML and WebVTT in MP4) and `language` is set.
+- A title with no manifest gets all its media from the `tracks[]` rows with a `url`. Each
+  `url` is one complete file, for example a fragmented MP4 that holds the whole
+  representation. A reader builds one track for each row. For a video or audio row, `codec` is
+  a codec name (`avc`, `hevc`, `ec3`) or an RFC 6381 codecs string (`dvh1.05.07`, `ec-3`).
+  Optional fields: `language`, `bitrate` in bits per second, `width`, `height`, `fps`,
+  `range` (`sdr`, `hlg`, `hdr10`, `hdr10p` or `dv`), `channels` as a string (`5.1`, or a
+  count such as `6`), and `atmos` (true for Dolby Atmos).
+- A `tracks[]` row can have `headers`, the request headers for its `url`. The rule for the
+  `headers` of a manifest applies: the package keeps only the allowlisted headers, on read and
+  on write.
 - A `tracks[]` row can list `kids`, the KIDs its media is encrypted with, normalised and
   checked as the KIDs in `keys` are. A `kids` that is not a list, or a malformed KID in it,
   rejects the file. A reader drops an all-zero KID and a repeated KID. A `kids` with no KID
@@ -150,3 +161,8 @@ position in the file, so two of them stay two titles. Title fields with no share
 as `summary` and `json_manifest`, come through under `x-unidl`. The fields of unidl's `drm`
 object that are not `system`, `pssh` or `wrm_header`, such as its HLS AES `hls_key`, `hls_iv`,
 `hls_method` and `clear`, come through as they are in that `drm[]` entry (`Drm.extras`).
+
+A unidl `json_manifest` in which each track is one complete file (one segment at the track URL,
+with no byte range) also becomes `tracks[]` rows, one for each track, with the title headers
+and the KIDs of the track. Any other `json_manifest` needs segments, which the format cannot
+hold yet. The title then gets the placeholder manifest URL `x-unidl:json_manifest` and no rows.
