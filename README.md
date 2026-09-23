@@ -90,7 +90,7 @@ me.write("export.json", doc)  # atomic, owner-only permissions
   two are in one title, in two titles, or come out of a legacy conversion. A KID of all
   zeros is a licence that returned no KID, so a reader drops the pair instead of reading it
   as a conflict. `dumps()` and `write()` normalise the keys and apply the same checks, so a
-  writer cannot produce a file the reader refuses: two spellings of one KID with one key
+  writer cannot produce a file the reader refuses: two spellings of one KID with one content key
   go out as one pair, and with two different keys they raise. This
   one failure raises `KeyConflict`, an `ExportError`: the file itself is readable, so a
   writer keeps it and reports the conflict, and quarantines only a file it cannot read.
@@ -114,10 +114,18 @@ me.write("export.json", doc)  # atomic, owner-only permissions
   rewrites a file it did not create loses nothing from it.
 - A title lists in `crit` the fields a reader must understand to use it at all. Each entry
   names a field the title carries, never a field of the base format, and the list has no
-  duplicates and is never empty. A reader that does not know an entry refuses that title
-  and says which name stopped it. `UNDERSTOOD` holds the names this reader knows, so a
-  reader that adds a feature adds its name there. Silence is the reason the rule exists: a
-  reader that ignored `crit` would write a file it could not decrypt.
+  duplicates and is never empty. A `crit` that breaks this rule rejects the file, as a
+  malformed KID does: it is a writer bug, and the reader cannot tell what the title needs.
+- The caller declares the `crit` entries it implements: `read(path, understood={...})` or
+  `loads(text, understood={...})`. The default is none, so a newer package never makes a
+  tool claim a feature the tool did not add. A title whose `crit` names any other entry is
+  refused: it is not in `Document.titles`, so a caller cannot act on it by mistake, and
+  `Document.refused` keeps it as it came, with the reason. `dumps()` writes a refused title
+  back unchanged, after the others, so a rewrite loses nothing. `Document.add()` replaces a
+  refused title with the same id. A refused title is opaque: the reader does not check its
+  manifests, headers or keys, and its keys are not in `key_pool()`. A file whose every
+  title is refused still reads, with an empty `titles`. Silence is the reason the rule
+  exists: a reader that ignored `crit` would write a file it could not decrypt.
 - The file holds keys and usually a signed URL: `write()` is atomic and owner-only.
 
 ## Legacy formats

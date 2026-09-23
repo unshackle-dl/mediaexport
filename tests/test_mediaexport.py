@@ -438,7 +438,6 @@ def _one_title(**extra: object) -> str:
 @pytest.mark.parametrize(
     "title,message",
     [
-        ({"crit": ["segments"], "segments": [1]}, "does not understand segments"),
         ({"crit": []}, "not a list"),
         ({"crit": "segments"}, "not a list"),
         ({"crit": ["a", "a"], "a": 1}, "same field twice"),
@@ -446,14 +445,14 @@ def _one_title(**extra: object) -> str:
         ({"crit": ["ghost"]}, "does not carry"),
     ],
 )
-def test_crit_refuses_a_title_this_reader_cannot_use(title: dict, message: str) -> None:
+def test_a_malformed_crit_rejects_the_file(title: dict, message: str) -> None:
     with pytest.raises(me.ExportError, match=message):
-        me.loads(_one_title(**title))
+        me.loads(_one_title(**title), understood={"a", "ghost", "segments", "title"})
 
 
-def test_a_crit_token_this_reader_knows_is_accepted_and_kept(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(me, "UNDERSTOOD", frozenset({"segments"}))
-    entry = me.loads(_one_title(crit=["segments"], segments=[{"url": "https://a/1.m4s"}])).titles[0]
+def test_a_crit_token_the_caller_understands_is_accepted_and_kept() -> None:
+    text = _one_title(crit=["segments"], segments=[{"url": "https://a/1.m4s"}])
+    entry = me.loads(text, understood={"segments"}).titles[0]
     assert entry.extensions["crit"] == ["segments"]
     assert json.loads(me.dumps(me.loads(me.dumps(me.Document("X", titles=[entry])))))["titles"][0]["crit"] == [
         "segments"
@@ -618,7 +617,6 @@ def test_dumps_rejects_a_kid_the_reader_would_refuse() -> None:
         me.dumps(doc)
 
 
-
 KID = "01" * 16
 TWO_KEYS = f'{{"{KID}": "{"11" * 16}", "{KID}": "{"22" * 16}"}}'
 
@@ -661,3 +659,61 @@ def test_dumps_writes_keys_the_way_the_reader_reads_them() -> None:
     raw = json.loads(me.dumps(me.Document("X", titles=[entry])))
     assert raw["titles"][0]["keys"] == {kid: "a1" * 16}
     assert me.loads(me.dumps(me.Document("X", titles=[entry]))).titles[0].keys == {kid: "a1" * 16}
+
+
+def _two_titles(refused: dict) -> str:
+    usable = {"id": "1", "kind": "movie", "title": "M", "manifests": [{"url": "u"}], "keys": {KID: "a1" * 16}}
+    return json.dumps({"kind": "mediaexport", "version": 1, "service": {"tag": "X"}, "titles": [usable, refused]})
+
+
+# no manifest, a key that conflicts with title 1 and an odd header: opaque, so none of it is checked
+REFUSED = {
+    "id": "2",
+    "kind": "movie",
+    "crit": ["segments", "hls-aes"],
+    "segments": [{"url": "https://a/1.ts"}],
+    "hls-aes": {"iv": "x"},
+    "keys": {KID: "b2" * 16},
+    "manifests": [{"url": "v", "headers": {"Cookie": "c"}}],
+}
+
+
+def test_only_the_title_a_crit_names_is_refused() -> None:
+    doc = me.loads(_two_titles(REFUSED))
+    assert [e.id for e in doc.titles] == ["1"]
+    assert [r.raw for r in doc.refused] == [REFUSED]
+    assert "segments" in doc.refused[0].reason and "hls-aes" in doc.refused[0].reason
+    assert doc.key_pool() == {KID: "a1" * 16}
+
+
+def test_a_refused_title_is_written_back_unchanged() -> None:
+    doc = me.loads(_two_titles(REFUSED))
+    doc.titles[0].title = "Renamed"
+    raw = json.loads(me.dumps(doc))
+    assert raw["titles"][0]["title"] == "Renamed" and raw["titles"][1] == REFUSED
+    assert me.loads(me.dumps(doc)).refused[0].raw == REFUSED
+
+
+def test_a_caller_that_understands_every_token_gets_the_title() -> None:
+    refused = REFUSED | {"keys": {"02" * 16: "b2" * 16}}
+    doc = me.loads(_two_titles(refused), understood=frozenset({"segments", "hls-aes"}))
+    assert [e.id for e in doc.titles] == ["1", "2"] and doc.refused == []
+    assert me.loads(_two_titles(refused), understood={"segments"}).refused[0].raw == refused
+
+
+def test_a_file_whose_every_title_is_refused_still_reads() -> None:
+    doc = me.loads(_one_title(crit=["segments"], segments=[]))
+    assert doc.titles == [] and len(doc.refused) == 1
+
+
+def test_read_takes_the_callers_tokens(tmp_path: Path) -> None:
+    path = tmp_path / "e.json"
+    path.write_text(_one_title(crit=["segments"], segments=[]), encoding="utf-8")
+    assert me.read(path).titles == []
+    assert len(me.read(path, understood={"segments"}).titles) == 1
+
+
+def test_add_replaces_a_refused_title_with_the_same_id() -> None:
+    doc = me.loads(_two_titles(REFUSED))
+    doc.add(_entry("2"))
+    assert [e.id for e in doc.titles] == ["1", "2"] and doc.refused == []

@@ -7,8 +7,9 @@ the file never decides which tracks it takes.
 
 Format: ``kind`` is ``mediaexport``, ``version`` is an integer bumped only for breaking
 changes. A reader accepts any version up to its own, ignores unknown fields, and carries
-``x-<app>`` blocks through untouched. ``loads`` converts the legacy ``unidl-export`` v1
-and unshackle v2 shapes on read and never writes them.
+``x-<app>`` blocks through untouched. A title whose ``crit`` names a field the caller does
+not understand is refused and kept as it came. ``loads`` converts the legacy
+``unidl-export`` v1 and unshackle v2 shapes on read and never writes them.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ import json
 import os
 import tempfile
 from collections.abc import Callable
+from collections.abc import Set as AbstractSet
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -26,7 +28,6 @@ KIND = "mediaexport"
 VERSION = 1
 
 __all__ = [
-    "UNDERSTOOD",
     "KIND",
     "VERSION",
     "Document",
@@ -35,6 +36,7 @@ __all__ = [
     "ExportError",
     "KeyConflict",
     "Manifest",
+    "Refused",
     "dumps",
     "from_unidl_v1",
     "from_unshackle_v2",
@@ -130,19 +132,34 @@ class Entry:
 
 
 @dataclass
+class Refused:
+    """A title this reader may not use: its ``crit`` names a field the caller does not understand.
+
+    ``raw`` is the title as it came, written back unchanged. ``reason`` names the fields.
+    """
+
+    raw: dict[str, Any]
+    reason: str
+
+
+@dataclass
 class Document:
+    """``titles`` are the titles a caller may use. ``refused`` are the others, kept for a rewrite."""
+
     service_tag: str
     service_name: str = ""
     region: str = ""
     generator: dict[str, str] = field(default_factory=dict)
     created: str = ""
     titles: list[Entry] = field(default_factory=list)
+    refused: list[Refused] = field(default_factory=list)
 
     def get(self, title_id: str) -> Entry | None:
         return next((e for e in self.titles if e.id == title_id), None)
 
     def add(self, entry: Entry) -> None:
-        """Same id replaces in place; a title exported twice is still one title."""
+        """Same id replaces in place, a refused title too; a title exported twice is still one title."""
+        self.refused = [r for r in self.refused if r.raw.get("id") != entry.id]
         for i, e in enumerate(self.titles):
             if e.id == entry.id:
                 self.titles[i] = entry
@@ -150,7 +167,11 @@ class Document:
         self.titles.append(entry)
 
     def key_pool(self) -> dict[str, str]:
-        """Every KID:KEY in the file. A KID with two different keys is a writer bug and raises."""
+        """Every KID:KEY in ``titles``. A KID with two different keys is a writer bug and raises.
+
+        A refused title is opaque: its keys may be in a shape this reader does not know, so
+        they are not in the pool.
+        """
         pool: dict[str, str] = {}
         for e in self.titles:
             for k, v in e.keys.items():
@@ -163,7 +184,7 @@ def dumps(doc: Document) -> str:
     """Serialise ``doc``. A document the reader would refuse raises here, not at the next read.
 
     Keys go out normalised the way the reader reads them, so two spellings of one KID are one
-    KID here too: with one key they collapse, with two they raise ``KeyConflict``.
+    KID here too: with one content key they collapse, with two they raise ``KeyConflict``.
     """
     pool: dict[str, str] = {}
     titles = []
@@ -181,7 +202,7 @@ def dumps(doc: Document) -> str:
     }
     if doc.region:
         raw["region"] = doc.region
-    raw["titles"] = titles
+    raw["titles"] = titles + [r.raw for r in doc.refused]
     return json.dumps(raw, indent=2, ensure_ascii=False) + "\n"
 
 
@@ -219,8 +240,13 @@ def write(path: Path | str, doc: Document) -> Path:
     return path
 
 
-def loads(text: str) -> Document:
-    """Read a mediaexport file, or convert a legacy unidl v1 / unshackle v2 file."""
+def loads(text: str, understood: AbstractSet[str] = frozenset()) -> Document:
+    """Read a mediaexport file, or convert a legacy unidl v1 / unshackle v2 file.
+
+    ``understood`` holds the ``crit`` tokens the caller implements. A title that needs any other
+    goes to ``Document.refused``. The default is none: a newer package does not make its caller
+    claim a feature it never added.
+    """
     try:
         raw = json.loads(text, object_pairs_hook=_unique_names)
     except ExportError:
@@ -235,7 +261,7 @@ def loads(text: str) -> Document:
     elif kind is None and raw.get("version") == 2 and isinstance(raw.get("titles"), dict):
         doc = _legacy(from_unshackle_v2, raw, "unshackle v2")
     else:
-        doc = _media_export_in(raw)
+        doc = _media_export_in(raw, understood)
     doc.key_pool()
     return doc
 
@@ -260,7 +286,7 @@ def _legacy(convert: Callable[[dict[str, Any]], Document], raw: dict[str, Any], 
         raise ExportError(f"not a usable {name} export ({type(exc).__name__}: {str(exc)[:80]})") from exc
 
 
-def _media_export_in(raw: dict[str, Any]) -> Document:
+def _media_export_in(raw: dict[str, Any], understood: AbstractSet[str]) -> Document:
     kind = raw.get("kind")
     if kind != KIND:
         raise ExportError(f"not a {KIND} file")
@@ -276,29 +302,37 @@ def _media_export_in(raw: dict[str, Any]) -> Document:
     titles = raw.get("titles")
     if not isinstance(titles, list) or not titles:
         raise ExportError("has no titles in it")
+    entries: list[Entry] = []
+    refused: list[Refused] = []
+    for i, t in enumerate(titles):
+        if not isinstance(t, dict):
+            raise ExportError("one of the titles is not an object")
+        missing = [token for token in _crit(t) if token not in understood]
+        if missing:
+            refused.append(Refused(t, f"requires {', '.join(missing)}, which this reader does not understand"))
+        else:
+            entries.append(_entry_in(t, i))
     return Document(
         service_tag=str(svc["tag"]),
         service_name=str(svc.get("name", "")),
         region=str(raw.get("region", "")),
         generator=dict(raw["generator"]) if isinstance(raw.get("generator"), dict) else {},
         created=str(raw.get("created", "")),
-        titles=[_entry_in(t, i) for i, t in enumerate(titles)],
+        titles=entries,
+        refused=refused,
     )
 
 
-def read(path: Path | str) -> Document:
+def read(path: Path | str, understood: AbstractSet[str] = frozenset()) -> Document:
     try:
         text = Path(path).read_text(encoding="utf-8")
     except OSError as exc:
         raise ExportError(f"could not be read ({exc})") from exc
-    return loads(text)
+    return loads(text, understood)
 
 
-def _entry_in(t: Any, index: int) -> Entry:
+def _entry_in(t: dict[str, Any], index: int) -> Entry:
     """One title. ``index`` is its position in the file, the id it gets when it has none of its own."""
-    if not isinstance(t, dict):
-        raise ExportError("one of the titles is not an object")
-    _check_crit(t)
     manifests = [
         Manifest(
             url=str(m["url"]),
@@ -345,14 +379,10 @@ def _entry_in(t: Any, index: int) -> Entry:
     )
 
 
-UNDERSTOOD: frozenset[str] = frozenset()
-"""The ``crit`` tokens this reader knows. A reader that adds a feature adds its token here."""
-
-
-def _check_crit(t: dict[str, Any]) -> None:
-    """A title names in ``crit`` the fields a reader must understand to use it at all."""
+def _crit(t: dict[str, Any]) -> list[str]:
+    """The fields a reader must understand to use the title at all. A malformed ``crit`` rejects the file."""
     if "crit" not in t:
-        return
+        return []
     crit = t["crit"]
     if not isinstance(crit, list) or not crit or not all(isinstance(x, str) and x for x in crit):
         raise ExportError("crit is not a list of field names")
@@ -363,8 +393,7 @@ def _check_crit(t: dict[str, Any]) -> None:
             raise ExportError(f"crit names {token}, which every reader already understands")
         if token not in t:
             raise ExportError(f"crit names {token}, which the title does not carry")
-        if token not in UNDERSTOOD:
-            raise ExportError(f"this reader does not understand {token}, which the title requires")
+    return crit
 
 
 _MANIFEST_FIELDS = frozenset(Manifest.__dataclass_fields__)
